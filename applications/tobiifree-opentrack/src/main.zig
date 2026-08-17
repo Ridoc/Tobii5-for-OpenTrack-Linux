@@ -17,8 +17,8 @@ const SocketSource = @import("socket_source").SocketSource;
 
 const log = std.log.scoped(.opentrack);
 
-const DEFAULT_MAX_YAW: f64 = 25.0; // ° at screen edge (Tobii Game Hub default ~25°)
-const DEFAULT_MAX_PITCH: f64 = 15.0; // ° at screen top/bottom edge
+const DEFAULT_MAX_YAW: f64 = 37.5; // ° at screen edge (tuned +50% over Tobii's ~25° default)
+const DEFAULT_MAX_PITCH: f64 = 22.5; // ° at screen top/bottom edge
 const DEFAULT_SMOOTHING: f64 = 0.3; // EMA alpha — higher = more responsive
 const DEFAULT_DEADZONE: f64 = 0.2; // ° yaw/pitch deadzone
 

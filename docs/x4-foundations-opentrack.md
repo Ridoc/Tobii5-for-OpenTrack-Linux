@@ -19,8 +19,8 @@ The primary Tobii experience in X4: **the cockpit camera follows where you
 look** (eye-aim-driven head-look), plus small head-position movement from the
 tracker's eye-origin triangulation:
 
-- **Yaw/Pitch** from binocular 2D gaze — default ±25°/±15° at screen edges
-  (matches Tobii Game Hub's default "Maximal Gaze Angle" ≈ 25°).
+- **Yaw/Pitch** from binocular 2D gaze — default ±37.5°/±22.5° at screen edges
+  (tuned +50% over Tobii Game Hub's default "Maximal Gaze Angle" ≈ 25°).
 - **X/Y/Z head position** from the midpoint of the calibrated eye origins
   (mm → cm), referenced once at startup.
 - **Roll = 0** (real head roll needs the IR-frame pipeline of Phase 3).
@@ -92,8 +92,8 @@ All tunables are CLI flags on the bridge:
 |---|---|---|
 | `--host` | `127.0.0.1` | UDP target host |
 | `--port` | `4242` | UDP target port (X4's listener) |
-| `--yaw-gain` | `25.0` | degrees of yaw at the left/right screen edge |
-| `--pitch-gain` | `15.0` | degrees of pitch at the top/bottom screen edge |
+| `--yaw-gain` | `37.5` | degrees of yaw at the left/right screen edge |
+| `--pitch-gain` | `22.5` | degrees of pitch at the top/bottom screen edge |
 | `--smoothing` | `0.3` | EMA alpha (0..1]; higher = more responsive, lower = smoother |
 | `--deadzone` | `0.2` | degrees of yaw/pitch deadzone near center |
 | `--no-position` | — | send zeros for head X/Y/Z (rotation-only mode) |
@@ -101,9 +101,9 @@ All tunables are CLI flags on the bridge:
 
 X4 applies angles and position 1:1 (`opentrackanglefactor`/`opentrackpositionfactor`
 are 1.0 by default, and OpenTrack's own filters aren't in the path), so the bridge
-is the only place to tune. Starting point that feels Tobii-like: yaw 25°, pitch
-15°, smoothing 0.3, deadzone 0.2°. If the camera feels sluggish, raise smoothing;
-if it feels twitchy, lower it and raise the deadzone.
+is the only place to tune. Defaults are tuned +50% over Tobii's 25°/15° for more
+rotation: yaw 37.5°, pitch 22.5°, smoothing 0.3, deadzone 0.2°. If the camera feels
+sluggish, raise smoothing; if it feels twitchy, lower it and raise the deadzone.
 
 ## Troubleshooting
 

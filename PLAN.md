@@ -72,8 +72,8 @@ No OpenTrack GUI, no Wine, no DLL injection required. Recenter is handled by X4 
      - Connect to `$XDG_RUNTIME_DIR/tobiifreed/gaze.sock`, send `subscribe`, decode
        `GazeSample` (reuse `daemon_protocol.zig` framing).
      - **Gaze → rotation** (defaults from Tobii; all CLI-configurable):
-       - `yaw   = (gaze_x − 0.5) × 2 × MAX_YAW`   (default MAX_YAW = 25°, → ±25° at screen edge)
-       - `pitch = (0.5 − gaze_y) × 2 × MAX_PITCH` (default MAX_PITCH = 15°, up = positive)
+       - `yaw   = (gaze_x − 0.5) × 2 × MAX_YAW`   (default MAX_YAW = 37.5°, → ±37.5° at screen edge; +50% over Tobii's 25°)
+       - `pitch = (0.5 − gaze_y) × 2 × MAX_PITCH` (default MAX_PITCH = 22.5°, up = positive; +50% over Tobii's 15°)
        - `roll  = 0` (Phase 3 may add roll from the eye baseline)
        - Optional curvature (exponent) later to mirror Tobii's "sensitivity gradient".
      - **Eye-origin → translation**:
@@ -93,7 +93,7 @@ No OpenTrack GUI, no Wine, no DLL injection required. Recenter is handled by X4 
 - Verify end-to-end: daemon reports gaze, bridge sends packets, X4 shows "OpenTrack
   Support: connected", Ctrl+T engages tracking, Scroll Lock recenters.
 - Tune gains/deadzone/EMA to match Tobii's feel (start: max gaze angle 25°, pitch 15°,
-  EMA ~0.3).
+  EMA ~0.3). *[On hardware: bumped +50% → yaw 37.5°, pitch 22.5° felt better.]*
 
 ### Phase 3 — True head pose (optional follow-up)
 
@@ -125,8 +125,10 @@ docs/x4-foundations-opentrack.md
 
 ## Open Questions
 
-- Exact default MAX_PITCH (15° proposed; Tobii Game Hub examples vary 0.1–1.0 pitch
-  multipliers — tune on hardware).
+- ~~Exact default MAX_PITCH (15° proposed; Tobii Game Hub examples vary 0.1–1.0 pitch
+  multipliers — tune on hardware).~~
+  **Resolved:** defaults tuned on hardware to yaw 37.5° / pitch 22.5° (+50% over
+  Tobii's 25°/15°); both remain `--yaw-gain`/`--pitch-gain` tunable.
 - ~~Whether to send head position (X/Y/Z) in v1 or leave zero and add later.~~
   **Resolved:** v1 sends head X/Y/Z from the eye-origin midpoint (mm → cm), captured
   once at startup; `--no-position` disables it.

@@ -57,8 +57,8 @@ All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--yaw-gain` | `25.0` | degrees of yaw at the screen edges |
-| `--pitch-gain` | `15.0` | degrees of pitch at the screen edges |
+| `--yaw-gain` | `37.5` | degrees of yaw at the screen edges |
+| `--pitch-gain` | `22.5` | degrees of pitch at the screen edges |
 | `--smoothing` | `0.3` | EMA alpha — higher = more responsive |
 | `--deadzone` | `0.2` | degrees of yaw/pitch deadzone near center |
 | `--no-position` | — | rotation-only (zeros for head X/Y/Z) |
