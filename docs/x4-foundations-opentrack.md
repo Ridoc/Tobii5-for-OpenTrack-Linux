@@ -190,9 +190,16 @@ caps so the spline can breathe, smoothing 0.93, pos smoothing 0.96),
 > every filter **rejects** samples that jump more than a plausible per-frame
 > limit (10°/frame, 1cm/frame) instead of following them, so a glitch can
 > never sweep the view; and the head reference is captured as the **average
-> over a ~0.45 s settle window** after acquisition — then **re-centered**
-> after a look-away gap, because each re-lock lands on slightly different
-> absolute origins (this was the source of the random -60° yaw jumps).
+> over a ~1 s settle window** after acquisition — then **re-centered** after
+> a look-away gap, because each re-lock lands on slightly different absolute
+> origins (this was the source of the random -60° yaw jumps).
+>
+> A constant offset (e.g. -105° yaw) means the reference was captured off to
+> one side. The pipeline **auto-recenters**: if you hold your head roughly
+> centered (±30° yaw / ±20° pitch) and still for ~1.2 s, the reference
+> re-assimilates to your current position. Parking to aim at a side view
+> (large angle) never triggers it. Let go of the controls for a moment and
+> the view centers itself.
 
 ## Troubleshooting
 

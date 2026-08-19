@@ -385,8 +385,15 @@ pub const TobiiPipeline = struct {
     settle_frames: u32 = 0,
     settle_sum: [3]f64 = .{ 0, 0, 0 },
     last_out: [6]f64 = .{ 0, 0, 0, 0, 0, 0 },
+    rest_time: f64 = 0,
+    last_yaw: f64 = 0,
+    last_pitch: f64 = 0,
 
-    const settle_target: u32 = 45; // ~0.45 s of samples to average the ref
+    const settle_target: u32 = 90; // ~1 s of samples to average the ref
+    const rest_recenter_s: f64 = 1.2; // hold still near center → re-center
+    const rest_yaw_deg: f64 = 30.0; // only recenter when roughly facing center
+    const rest_pitch_deg: f64 = 20.0;
+    const rest_vel_deg_s: f64 = 3.0;
 
     /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
     /// and `last_out` so the view holds instead of zeroing during a re-settle.
@@ -465,11 +472,33 @@ pub const TobiiPipeline = struct {
         }
 
         // 3. blend (OEM 85/15) + pitch boost + velocity-adaptive smoothing with
-        //    reject-and-hold spike rejection (10°/frame rot, 1cm/frame pos).
+        //    reject-and-hold spike rejection (10°/frame, 1cm/frame).
         const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio;
         const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio) * p.pitch_gain;
         const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing, 10.0);
         const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing, 10.0);
+
+        // 3b. Auto-recenter: a bad ref would otherwise leave a constant
+        //     offset (e.g. -105°). If the head is roughly centered AND still
+        //     for a sustained stretch, re-assimilate the reference. Parking
+        //     to aim at a side view (large angle) never triggers this.
+        const dt_rest = @min(dt, 0.1);
+        const yaw_vel = @abs(yaw - self.last_yaw) / @max(dt_rest, 1e-6);
+        const pitch_vel = @abs(pitch - self.last_pitch) / @max(dt_rest, 1e-6);
+        if (@abs(yaw) < rest_yaw_deg and @abs(pitch) < rest_pitch_deg and
+            yaw_vel + pitch_vel < rest_vel_deg_s)
+        {
+            self.rest_time += dt_rest;
+        } else {
+            self.rest_time = 0;
+        }
+        self.last_yaw = yaw;
+        self.last_pitch = pitch;
+        if (self.rest_time >= rest_recenter_s) {
+            self.rest_time = 0;
+            self.reset();
+            return self.last_out;
+        }
         if (std.posix.getenv("TOBII_TRACE") != null) {
             std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} mid=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d}\n", .{
                 head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch,
