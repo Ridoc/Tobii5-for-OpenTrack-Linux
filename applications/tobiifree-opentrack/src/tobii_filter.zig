@@ -376,6 +376,7 @@ pub const TobiiPipeline = struct {
     gaze: GazeStateFilter = .{},
     rot_yaw: AdaptiveSmoother = .{},
     rot_pitch: AdaptiveSmoother = .{},
+    roll_s: AdaptiveSmoother = .{},
     pos_x: AdaptiveSmoother = .{},
     pos_y: AdaptiveSmoother = .{},
     pos_z: AdaptiveSmoother = .{},
@@ -451,16 +452,33 @@ pub const TobiiPipeline = struct {
         const gaze_yaw = (g[0] - 0.5) * p.gaze_scale;
         const gaze_pitch = (0.5 - g[1]) * p.gaze_scale_pitch;
 
-        // 2. head rotation from the neck-pivot model (eye-origin midpoint).
+        // 2. head rotation.
+        //    Yaw/roll come from the interocular line when both eyes are
+        //    valid: turning the head makes one eye closer (depth difference),
+        //    so atan2(ez, ex) is the genuine head-turn angle and atan2(ey, ex)
+        //    is the genuine head roll. The midpoint's Δz is never used for
+        //    rotation, so leaning forward can't flip the angle to ±180°.
+        //    One-eye fallback uses safe atan(Δx / neck); pitch uses the
+        //    midpoint's vertical offset vs the ref, again atan (no Δz).
         var head_yaw: f64 = 0;
         var head_pitch: f64 = 0;
+        var head_roll: f64 = 0;
         if (has_origins and self.ref_set) {
-            const dx = mid[0] - self.ref_mid[0];
             const dy = mid[1] - self.ref_mid[1];
-            const dz = mid[2] - self.ref_mid[2];
             const neck_mm = p.neck * 10.0;
-            head_yaw = std.math.atan2(dx, neck_mm - dz) * 180.0 / std.math.pi;
-            head_pitch = std.math.atan2(dy, neck_mm) * 180.0 / std.math.pi;
+            if (sample.validity_L == 0 and sample.validity_R == 0) {
+                const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
+                const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
+                const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
+                if (ex > 1.0) {
+                    head_yaw = std.math.atan2(ez, ex) * 180.0 / std.math.pi;
+                    head_roll = std.math.atan2(ey, ex) * 180.0 / std.math.pi;
+                }
+            } else {
+                const dx = mid[0] - self.ref_mid[0];
+                head_yaw = std.math.atan(dx / neck_mm) * 180.0 / std.math.pi;
+            }
+            head_pitch = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
             if (p.flip_yaw) head_yaw = -head_yaw;
             if (p.flip_pitch) head_pitch = -head_pitch;
             head_yaw *= p.head_gain;
@@ -473,6 +491,7 @@ pub const TobiiPipeline = struct {
         const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio) * p.pitch_gain;
         const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing, 10.0);
         const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing, 10.0);
+        const roll = self.roll_s.update(head_roll, dt, p.smoothing, 10.0);
 
         // 3b. Auto-recenter: a bad ref would otherwise leave a constant
         //     offset (e.g. -105°). If the head is roughly centered AND still
@@ -496,8 +515,15 @@ pub const TobiiPipeline = struct {
             return self.last_out;
         }
         if (std.posix.getenv("TOBII_TRACE") != null) {
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} mid=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d}\n", .{
-                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch,
+            var buf2: [96]u8 = undefined;
+            const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {
+                const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
+                const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
+                const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
+                break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
+            } else "";
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} mid=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d}\n", .{
+                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
                 mid[0], mid[1], mid[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], n,
             });
         }
@@ -528,7 +554,7 @@ pub const TobiiPipeline = struct {
             pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
         }
 
-        self.last_out = .{ px, py, pz, fy, fp, 0 };
+        self.last_out = .{ px, py, pz, fy, fp, roll };
         return self.last_out;
     }
 };

@@ -21,7 +21,8 @@ Tobii ET5 (USB)
 ## What you get
 
 The Tobii "Extended View" experience in X4: rotation driven mostly by your
-**head** (approximated from the eye-origin midpoint around a neck pivot) with a
+**head** (yaw/roll from the interocular line between your two eyes; pitch from
+the eye-origin midpoint) with a
 gentle **gaze lead** (OEM 85/15 blend), plus head-position movement from the
 tracker's eye-origin triangulation:
 
@@ -102,8 +103,8 @@ sliders** grouped into **Sensitivity** and **Tobii feel** sections:
 - **Eye ratio** — the gaze lead blended into rotation (OEM 0.15 = 85/15).
 - **Pos gain** — translation multiplier (default 2.0, so you don't lean out of
   your chair).
-- **Neck (cm)** — neck-pivot distance used to derive head yaw/pitch from the
-  eye-origin midpoint (default 13).
+- **Neck (cm)** — pivot distance used for pitch and the one-eye yaw fallback
+  (default 13).
 - **Gaze yaw/pitch scale** — gaze → angle at the screen edge (40°/30°).
 - **Curve** — `Linear` / `Power` / `Tobii` response-curve modes.
 - **Curve exp** — power-curve exponent (default 0.5 expands the edges).
@@ -158,8 +159,12 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
 
 1. **Gaze** — 3-state dynamic EWMA (fixation 0.03 / pursuit 0.25 / saccade 0.015,
    time-corrected) so saccades never whip the camera.
-2. **Head** — yaw/pitch derived from the eye-origin midpoint around a neck pivot
-   (`atan2(Δx, neck−Δz)`), ×`head_gain`.
+2. **Head** — yaw/roll from the **interocular line** when both eyes are valid
+   (`yaw = atan2(Δz, Δx)` of the two eyes; `roll = atan2(Δy, Δx)`), which is the
+   genuine head-turn angle and never uses the midpoint's depth, so leaning
+   forward can't flip the angle to ±180° (the old `atan2(Δx, neck−Δz)` flip
+   trap). One-eye fallback: `yaw = atan(Δx/neck)`. Pitch: `atan(Δy/neck)`.
+   All ×`head_gain` (+`pitch_gain`).
 3. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
 4. **Smoothing** — velocity-adaptive retention (0.90 at rest → 0.05 at 180°/s),
    time-corrected per frame; translation uses the heavier `pos_smoothing`.
