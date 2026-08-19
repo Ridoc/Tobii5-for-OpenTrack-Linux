@@ -99,6 +99,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkSystemLibrary("libusb-1.0");
+    exe.linkSystemLibrary("gtk4");
     exe.linkLibC();
 
     b.installArtifact(exe);

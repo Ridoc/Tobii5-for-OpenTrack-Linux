@@ -57,7 +57,7 @@
     tobiifree-opentrack = mkZigApp {
       name = "tobiifree-opentrack";
       dir = "applications/tobiifree-opentrack";
-      buildInputs = [pkgs.libusb1];
+      buildInputs = [pkgs.libusb1 pkgs.gtk4];
     };
 
     # Static SPA: wasm build → bundle → npm install → vite build.

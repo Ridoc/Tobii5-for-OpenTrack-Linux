@@ -46,7 +46,7 @@ shipped with OpenTrack/facetracknoir.
 - Tobii Eye Tracker 5 + [udev rules](assets/99-tobii.rules)
 - An OpenTrack-capable game. For **X4: Foundations** (native Linux, Steam):
   **7.50 public beta or newer**
-- Zig 0.14+ (`nix develop`), `libusb-1.0`, `pkg-config`
+- Zig 0.14+ (`nix develop`), `libusb-1.0`, `pkg-config`, `gtk4` (status window)
 
 ## Quick start
 
@@ -71,6 +71,11 @@ info(opentrack): head reference captured: (-18, 13, 572) mm
 info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sample 1)
 ```
 
+The bridge opens a small **GTK4 status window** showing the live pose values
+(X/Y/Z, Yaw/Pitch/Roll) with **sensitivity sliders** and manual text overrides
+for the yaw/pitch gains — both apply to the stream live, no restart needed.
+Pass `--headless` for console-only operation.
+
 ### In-game setup
 
 Example — **X4: Foundations**:
@@ -93,12 +98,17 @@ All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`):
 | `--smoothing` | `0.3` | EMA alpha — higher = more responsive |
 | `--deadzone` | `0.2` | degrees of yaw/pitch deadzone near center |
 | `--no-position` | — | rotation-only (zeros for head X/Y/Z) |
+| `--headless` | — | no GUI window, console logging only |
+
+In the GUI, the yaw/pitch gains (`--yaw-gain`/`--pitch-gain`) can also be tuned
+live with the sensitivity sliders or a typed value + Enter.
 
 Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md).
 
 ## What's here
 
-- **`applications/tobiifree-opentrack/`** — the OpenTrack bridge (Zig).
+- **`applications/tobiifree-opentrack/`** — the OpenTrack bridge with a GTK4
+  status window (live pose + sensitivity sliders; `--headless` for console-only).
 - **`driver/`** — TTP/TLV protocol engine for the ET5 (from upstream tobiifree).
 - **`applications/tobiifreed/`** — Linux daemon; owns the USB device, exposes
   gaze over a Unix socket.

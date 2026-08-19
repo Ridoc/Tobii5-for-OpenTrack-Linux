@@ -39,7 +39,8 @@ Tobii Game Integration API and are **not** reachable via OpenTrack.
 - Tobii Eye Tracker 5 connected (udev rules installed, see below).
 - X4: Foundations native Linux (Steam), **7.50 public beta or newer**
   (the beta added the OpenTrack listener).
-- `zig` 0.14+ (dev shell: `nix develop`), `libusb-1.0`, `pkg-config`.
+- `zig` 0.14+ (dev shell: `nix develop`), `libusb-1.0`, `pkg-config`,
+  and `gtk4` dev headers for the status window (`--headless` skips it).
 
 ## Build
 
@@ -82,6 +83,20 @@ info(opentrack): head reference captured: (-18, 13, 572) mm
 info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sample 1)
 ```
 
+## Status window (GTK4)
+
+By default the bridge opens a small GTK4 window showing the live pose values
+(X/Y/Z in cm, Yaw/Pitch/Roll in degrees) plus a status line ("Eyes: tracked" /
+"Eyes: lost") and two **sensitivity sliders**:
+
+- **Yaw / Pitch** sliders adjust `--yaw-gain` / `--pitch-gain` live (0–90°).
+- The **text entry** next to each slider is a manual override — type a value
+  and press Enter to set it precisely (clamped to 0–90°).
+
+Everything applies immediately to the outgoing stream, no restart needed. Pass
+`--headless` to run console-only (e.g. inside X4's built-in OpenTrack Support,
+or on a system without a display).
+
 ## In-game setup (X4: Foundations, native Linux)
 
 1. Options → **Controls** → enable **OpenTrack Support**.
@@ -109,6 +124,8 @@ are 1.0 by default, and OpenTrack's own filters aren't in the path), so the brid
 is the only place to tune. Defaults are tuned +50% over Tobii's 25°/15° for more
 rotation: yaw 37.5°, pitch 22.5°, smoothing 0.3, deadzone 0.2°. If the camera feels
 sluggish, raise smoothing; if it feels twitchy, lower it and raise the deadzone.
+In the GUI the Yaw/Pitch gains can also be adjusted live with the sensitivity
+sliders (or typed into the entry and confirmed with Enter).
 
 ## Troubleshooting
 
