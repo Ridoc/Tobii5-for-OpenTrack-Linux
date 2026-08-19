@@ -82,6 +82,8 @@ var g_scale_pos_smoothing: ?*c.GtkScale = null;
 var g_entry_pos_smoothing: ?*c.GtkEntry = null;
 var g_scale_head_gain: ?*c.GtkScale = null;
 var g_entry_head_gain: ?*c.GtkEntry = null;
+var g_scale_pitch_gain: ?*c.GtkScale = null;
+var g_entry_pitch_gain: ?*c.GtkEntry = null;
 var g_scale_eye_ratio: ?*c.GtkScale = null;
 var g_entry_eye_ratio: ?*c.GtkEntry = null;
 var g_scale_pos_gain: ?*c.GtkScale = null;
@@ -116,6 +118,7 @@ const SensAxis = enum {
     smoothing,
     pos_smoothing,
     head_gain,
+    pitch_gain,
     eye_ratio,
     pos_gain,
     neck,
@@ -139,6 +142,7 @@ fn axisDef(axis: SensAxis) AxisDef {
         .smoothing => .{ .min = 0.30, .max = 0.98, .step = 0.01, .digits = 2 },
         .pos_smoothing => .{ .min = 0.30, .max = 0.99, .step = 0.01, .digits = 2 },
         .head_gain => .{ .min = 0, .max = 5, .step = 0.1, .digits = 1 },
+        .pitch_gain => .{ .min = 0.5, .max = 3, .step = 0.05, .digits = 2 },
         .eye_ratio => .{ .min = 0, .max = 1, .step = 0.01, .digits = 2 },
         .pos_gain => .{ .min = 0, .max = 5, .step = 0.1, .digits = 1 },
         .neck => .{ .min = 5, .max = 20, .step = 0.5, .digits = 1 },
@@ -156,6 +160,7 @@ fn sensField(axis: SensAxis) *f64 {
         .smoothing => &g_opts.p.smoothing,
         .pos_smoothing => &g_opts.p.pos_smoothing,
         .head_gain => &g_opts.p.head_gain,
+        .pitch_gain => &g_opts.p.pitch_gain,
         .eye_ratio => &g_opts.p.eye_ratio,
         .pos_gain => &g_opts.p.pos_gain,
         .neck => &g_opts.p.neck,
@@ -173,6 +178,7 @@ fn sensScale(axis: SensAxis) *?*c.GtkScale {
         .smoothing => &g_scale_smoothing,
         .pos_smoothing => &g_scale_pos_smoothing,
         .head_gain => &g_scale_head_gain,
+        .pitch_gain => &g_scale_pitch_gain,
         .eye_ratio => &g_scale_eye_ratio,
         .pos_gain => &g_scale_pos_gain,
         .neck => &g_scale_neck,
@@ -190,6 +196,7 @@ fn sensEntry(axis: SensAxis) *?*c.GtkEntry {
         .smoothing => &g_entry_smoothing,
         .pos_smoothing => &g_entry_pos_smoothing,
         .head_gain => &g_entry_head_gain,
+        .pitch_gain => &g_entry_pitch_gain,
         .eye_ratio => &g_entry_eye_ratio,
         .pos_gain => &g_entry_pos_gain,
         .neck => &g_entry_neck,
@@ -203,7 +210,7 @@ fn sensFormat(axis: SensAxis, v: f64, buf: []u8) ?[]const u8 {
     const s = switch (axis) {
         .yaw, .gaze_scale, .gaze_scale_pitch => std.fmt.bufPrint(buf, "{d:.1}", .{v}),
         .pitch, .deadzone, .head_gain, .pos_gain, .neck => std.fmt.bufPrint(buf, "{d:.1}", .{v}),
-        .smoothing, .pos_smoothing, .eye_ratio, .curve_exp => std.fmt.bufPrint(buf, "{d:.2}", .{v}),
+        .smoothing, .pos_smoothing, .pitch_gain, .eye_ratio, .curve_exp => std.fmt.bufPrint(buf, "{d:.2}", .{v}),
     } catch return null;
     return s;
 }
@@ -242,11 +249,13 @@ fn onGaze(sample: *const core.GazeSample) void {
         return;
     }
 
-    // Frame-independent dt from the device clock.
+    // Frame-independent dt from the device clock. Allow long gaps through so
+    // the pipeline can detect re-acquisition and re-center (it clamps dt
+    // internally for the smoothers).
     var dt: f64 = 0.0111;
     if (g_last_ts != 0) {
         const d = @as(f64, @floatFromInt(sample.timestamp_us - g_last_ts)) / 1e6;
-        if (d > 0 and d < 0.5) dt = d;
+        if (d > 0 and d < 5.0) dt = d;
     }
     g_last_ts = sample.timestamp_us;
 
@@ -287,8 +296,8 @@ fn addValueRow(grid: [*c]c.GtkWidget, row: c_int, name: [*:0]const u8, out: *?*c
 }
 
 fn updateSourceLabel() void {
-    setText(g_label_source, &g_srcbuf, "Preset: {s}  ·  {s}:{d}  ·  head {d:.1}×  eye {d:.2}", .{
-        g_opts.p.name, g_opts.host, g_opts.port, g_opts.p.head_gain, g_opts.p.eye_ratio,
+    setText(g_label_source, &g_srcbuf, "Preset: {s}  ·  {s}:{d}  ·  head {d:.1}×  eye {d:.2}  pitch {d:.2}×", .{
+        g_opts.p.name, g_opts.host, g_opts.port, g_opts.p.head_gain, g_opts.p.eye_ratio, g_opts.p.pitch_gain,
     });
 }
 
@@ -410,7 +419,7 @@ fn savePresetsToDisk() void {
 fn syncSliders() void {
     const axes = [_]SensAxis{
         .yaw,     .pitch,  .deadzone,      .smoothing,
-        .pos_smoothing, .head_gain, .eye_ratio,     .pos_gain,
+        .pos_smoothing, .head_gain, .pitch_gain, .eye_ratio, .pos_gain,
         .neck,    .gaze_scale, .gaze_scale_pitch, .curve_exp,
     };
     for (axes) |axis| {
@@ -635,12 +644,13 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_grid_set_row_spacing(@ptrCast(feel_grid), 4);
     c.gtk_box_append(@ptrCast(box), @ptrCast(feel_grid));
     addSensRow(feel_grid, 0, "Head gain", .head_gain);
-    addSensRow(feel_grid, 1, "Eye ratio", .eye_ratio);
-    addSensRow(feel_grid, 2, "Pos gain", .pos_gain);
-    addSensRow(feel_grid, 3, "Neck (cm)", .neck);
-    addSensRow(feel_grid, 4, "Gaze yaw scale", .gaze_scale);
-    addSensRow(feel_grid, 5, "Gaze pitch scale", .gaze_scale_pitch);
-    addSensRow(feel_grid, 6, "Curve exp", .curve_exp);
+    addSensRow(feel_grid, 1, "Pitch gain", .pitch_gain);
+    addSensRow(feel_grid, 2, "Eye ratio", .eye_ratio);
+    addSensRow(feel_grid, 3, "Pos gain", .pos_gain);
+    addSensRow(feel_grid, 4, "Neck (cm)", .neck);
+    addSensRow(feel_grid, 5, "Gaze yaw scale", .gaze_scale);
+    addSensRow(feel_grid, 6, "Gaze pitch scale", .gaze_scale_pitch);
+    addSensRow(feel_grid, 7, "Curve exp", .curve_exp);
 
     // Curve mode dropdown + flips.
     const mode_row = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 6);
@@ -709,6 +719,7 @@ fn usage() void {
         \\  --pos-smoothing <0..1> translation rest retention (default {d:.2})
         \\  --deadzone <deg>     yaw/pitch deadzone (default {d:.2})
         \\  --head-gain <0..5>   head-sensitivity multiplier (default {d:.1})
+        \\  --pitch-boost <0.5..3> pitch input multiplier (default {d:.2})
         \\  --eye-ratio <0..1>   gaze contribution to rotation (default {d:.2})
         \\  --pos-gain <0..5>    translation multiplier (default {d:.1})
         \\  --neck <cm>          neck-pivot distance (default {d:.0})
@@ -733,6 +744,7 @@ fn usage() void {
         tobii.BUILTIN_PRESETS[0].pos_smoothing,
         tobii.BUILTIN_PRESETS[0].deadzone,
         tobii.BUILTIN_PRESETS[0].head_gain,
+        tobii.BUILTIN_PRESETS[0].pitch_gain,
         tobii.BUILTIN_PRESETS[0].eye_ratio,
         tobii.BUILTIN_PRESETS[0].pos_gain,
         tobii.BUILTIN_PRESETS[0].neck,
@@ -802,6 +814,11 @@ fn parseArgs() void {
             };
         } else if (std.mem.eql(u8, arg, "--head-gain")) {
             g_opts.p.head_gain = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
+                usage();
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--pitch-boost")) {
+            g_opts.p.pitch_gain = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
                 usage();
                 std.process.exit(2);
             };
@@ -929,8 +946,8 @@ pub fn main() void {
     installSignalHandlers();
 
     log.info("streaming gaze → udp {s}:{d}  (preset {s})", .{ g_opts.host, g_opts.port, g_opts.p.name });
-    log.info("head {d:.1}× eye {d:.2}  curve {s}  cap {d:.0}/{d:.0}°  smoothing {d:.2}  deadzone {d:.1}°", .{
-        g_opts.p.head_gain, g_opts.p.eye_ratio,
+    log.info("head {d:.1}× eye {d:.2}  pitch {d:.2}×  curve {s}  cap {d:.0}/{d:.0}°  smoothing {d:.2}  deadzone {d:.1}°", .{
+        g_opts.p.head_gain, g_opts.p.eye_ratio, g_opts.p.pitch_gain,
         tobii.curveModeName(@enumFromInt(g_opts.p.curve_mode)),
         g_opts.p.max_yaw, g_opts.p.max_pitch,
         g_opts.p.smoothing, g_opts.p.deadzone,

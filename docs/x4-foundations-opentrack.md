@@ -185,9 +185,14 @@ caps so the spline can breathe, smoothing 0.93, pos smoothing 0.96),
 > The Catmull-Rom evaluator clamps input to the last control point, so there's
 > no extrapolation past 35° yaw (which would otherwise shoot toward infinity).
 >
-> Camera jumps are suppressed two ways: the eye-origin midpoint only averages
-> **valid** eyes (a dropped eye otherwise shifts the reference), and every
-> filter clamps its per-frame delta, so a glitch spike can't yank the view.
+> Camera jumps are suppressed three ways: the eye-origin midpoint only
+> averages **valid** eyes (a dropped eye otherwise shifts the reference);
+> every filter **rejects** samples that jump more than a plausible per-frame
+> limit (10°/frame, 1cm/frame) instead of following them, so a glitch can
+> never sweep the view; and the head reference is captured as the **average
+> over a ~0.45 s settle window** after acquisition — then **re-centered**
+> after a look-away gap, because each re-lock lands on slightly different
+> absolute origins (this was the source of the random -60° yaw jumps).
 
 ## Troubleshooting
 

@@ -44,6 +44,7 @@ pub const Preset = struct {
     deadzone: f64 = 0.15, // ° yaw/pitch deadzone
     head_gain: f64 = 2.0, // head-sensitivity multiplier
     eye_ratio: f64 = 0.15, // gaze contribution to rotation (OEM 85/15)
+    pitch_gain: f64 = 1.0, // extra pitch input multiplier (X4 pitch is weak)
     pos_gain: f64 = 2.0, // translation multiplier
     neck: f64 = 13.0, // cm from neck pivot to eye plane
     curve_mode: u8 = 2, // CurveMode.tobii
@@ -105,6 +106,7 @@ pub const BUILTIN_PRESETS = [_]Preset{
         // 4. Gain (do NOT pre-multiply head angle into the spline)
         .head_gain = 1.0,
         .pos_gain = 1.2, // slight boost for leaning in the cockpit
+        .pitch_gain = 1.5, // +50% pitch for testing (up/down is weak)
         .neck = 12.0,
 
         // 5. Curve
@@ -264,9 +266,12 @@ pub const AdaptiveSmoother = struct {
 
     const target_dt: f64 = 0.0111; // ~90 Hz baseline
 
-    /// Update with a per-frame delta clamp (`max_step`) to reject glitch
-    /// spikes (e.g. a one-eye drop shifting the eye-origin midpoint) before
-    /// the velocity-adaptive smoothing can propagate them.
+    /// Update with a per-frame delta limit (`max_step`). Samples that jump
+    /// more than `max_step` from the last accepted raw value are treated as
+    /// tracker glitches (a dropped eye shifting the eye-origin midpoint,
+    /// re-acquisition spikes) and REJECTED outright — state and `last_raw`
+    /// are held, so a glitch can never sweep or yank the view. A legit fast
+    /// head turn spans many frames and each frame stays under `max_step`.
     pub fn update(self: *AdaptiveSmoother, value: f64, dt: f64, rest_smoothing: f64, max_step: f64) f64 {
         if (!self.init) {
             self.state = value;
@@ -274,18 +279,15 @@ pub const AdaptiveSmoother = struct {
             self.init = true;
             return value;
         }
-        var v = value;
         const delta = value - self.last_raw;
-        if (@abs(delta) > max_step) {
-            v = self.last_raw + std.math.sign(delta) * max_step;
-        }
+        if (@abs(delta) > max_step) return self.state; // reject glitch, hold
         const dt_safe = @max(dt, 1e-6);
-        const vel = @abs(v - self.last_raw) / dt_safe;
-        self.last_raw = v;
+        const vel = @abs(delta) / dt_safe;
+        self.last_raw = value;
         const retention = retentionForVelocity(vel, rest_smoothing);
         const retention_dt = std.math.pow(f64, retention, dt_safe / target_dt);
         const ewma = 1.0 - retention_dt;
-        self.state += ewma * (v - self.state);
+        self.state += ewma * (value - self.state);
         return self.state;
     }
 };
@@ -378,15 +380,33 @@ pub const TobiiPipeline = struct {
     pos_y: AdaptiveSmoother = .{},
     pos_z: AdaptiveSmoother = .{},
     ref_set: bool = false,
+    had_ref: bool = false,
     ref_mid: [3]f64 = .{ 0, 0, 0 },
+    settle_frames: u32 = 0,
+    settle_sum: [3]f64 = .{ 0, 0, 0 },
+    last_out: [6]f64 = .{ 0, 0, 0, 0, 0, 0 },
 
+    const settle_target: u32 = 45; // ~0.45 s of samples to average the ref
+
+    /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
+    /// and `last_out` so the view holds instead of zeroing during a re-settle.
     pub fn reset(self: *TobiiPipeline) void {
+        const keep_had = self.had_ref;
+        const keep_out = self.last_out;
         self.* = .{};
+        self.had_ref = keep_had;
+        self.last_out = keep_out;
     }
 
     /// Process one gaze sample into a 6-DOF pose
     /// (X, Y, Z in cm; Yaw, Pitch, Roll in degrees).
     pub fn process(self: *TobiiPipeline, sample: *const core.GazeSample, p: *const Preset, dt: f64) [6]f64 {
+        // A long gap means the tracker lost the eyes and re-locked. Its
+        // absolute eye-origin estimate lands slightly differently each
+        // re-acquisition, so the old ref would produce a bogus 20-60° jump.
+        // Re-center on the new origin (freeze the view while it settles).
+        if (self.ref_set and dt > 0.5) self.reset();
+
         // Eye-origin midpoint from VALID eyes only (a dropped eye otherwise
         // shifts the midpoint toward the remaining eye → camera yanks).
         var mid: [3]f64 = .{ 0, 0, 0 };
@@ -403,8 +423,23 @@ pub const TobiiPipeline = struct {
         if (has_origins) {
             for (0..3) |i| mid[i] /= @as(f64, @floatFromInt(n));
             if (!self.ref_set) {
-                self.ref_mid = mid;
-                self.ref_set = true;
+                // Settle window: average the origin before locking the ref so
+                // the tracker's acquisition wobble can't become a fixed offset.
+                for (0..3) |i| self.settle_sum[i] += mid[i];
+                self.settle_frames += 1;
+                if (self.settle_frames >= settle_target) {
+                    for (0..3) |i| {
+                        self.ref_mid[i] = self.settle_sum[i] / @as(f64, @floatFromInt(self.settle_frames));
+                    }
+                    self.ref_set = true;
+                    self.had_ref = true;
+                    self.settle_frames = 0;
+                    self.settle_sum = .{ 0, 0, 0 };
+                } else if (self.had_ref) {
+                    return self.last_out; // hold the view during a re-settle
+                } else {
+                    return .{ 0, 0, 0, 0, 0, 0 }; // startup, no tracking yet
+                }
             }
         }
 
@@ -429,11 +464,18 @@ pub const TobiiPipeline = struct {
             head_pitch *= p.head_gain;
         }
 
-        // 3. blend (OEM 85/15) + velocity-adaptive smoothing with spike clamp.
+        // 3. blend (OEM 85/15) + pitch boost + velocity-adaptive smoothing with
+        //    reject-and-hold spike rejection (10°/frame rot, 1cm/frame pos).
         const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio;
-        const raw_pitch = head_pitch + gaze_pitch * p.eye_ratio;
-        const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing, 3.0);
-        const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing, 3.0);
+        const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio) * p.pitch_gain;
+        const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing, 10.0);
+        const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing, 10.0);
+        if (std.posix.getenv("TOBII_TRACE") != null) {
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} mid=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d}\n", .{
+                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch,
+                mid[0], mid[1], mid[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], n,
+            });
+        }
 
         // 4. response curve + cap + deadzone.
         const fy = deadzone(applyCurve(
@@ -456,11 +498,12 @@ pub const TobiiPipeline = struct {
         var py: f64 = 0;
         var pz: f64 = 0;
         if (p.send_position and has_origins and self.ref_set) {
-            px = self.pos_x.update((mid[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
-            py = self.pos_y.update((mid[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
-            pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
+            px = self.pos_x.update((mid[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
+            py = self.pos_y.update((mid[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
+            pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
         }
 
-        return .{ px, py, pz, fy, fp, 0 };
+        self.last_out = .{ px, py, pz, fy, fp, 0 };
+        return self.last_out;
     }
 };
