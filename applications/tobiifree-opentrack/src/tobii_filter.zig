@@ -88,19 +88,28 @@ pub const BUILTIN_PRESETS = [_]Preset{
     },
     .{
         .name = "x4-tuned",
-        .max_yaw = 35.0,
-        .max_pitch = 22.0,
-        .gaze_scale = 40.0,
-        .gaze_scale_pitch = 30.0,
-        .smoothing = 0.90,
-        .pos_smoothing = 0.95,
-        .deadzone = 0.2,
-        .head_gain = 1.8,
-        .eye_ratio = 0.35,
-        .pos_gain = 1.5,
-        .neck = 13.0,
-        .curve_mode = 1,
-        .curve_exp = 0.8,
+        // 1. Let the Tobii spline output its full range; do not clamp it early.
+        .max_yaw = 180.0,
+        .max_pitch = 90.0,
+
+        // 2. Gaze tracking (Eye input)
+        .gaze_scale = 35.0,
+        .gaze_scale_pitch = 25.0,
+        .eye_ratio = 0.25, // noticeable but smooth OEM "tug"
+
+        // 3. Smoothers
+        .smoothing = 0.93,     // high retention at rest to kill jitter
+        .pos_smoothing = 0.96, // keep translation buttery smooth
+        .deadzone = 0.2,       // micro-deadzone (blends into spline's native 2° flatline)
+
+        // 4. Gain (do NOT pre-multiply head angle into the spline)
+        .head_gain = 1.0,
+        .pos_gain = 1.2, // slight boost for leaning in the cockpit
+        .neck = 12.0,
+
+        // 5. Curve
+        .curve_mode = 2,  // Tobii Catmull-Rom spline
+        .curve_exp = 1.0, // unused by mode 2; kept at 1.0 to prevent math errors
     },
     .{
         .name = "x4-legacy",

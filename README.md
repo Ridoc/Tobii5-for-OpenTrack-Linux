@@ -115,8 +115,8 @@ code). Key parameters:
 
 **Built-in presets**: `tobii-official` (OEM defaults: Tobii spline curve,
 180°/90° caps, 2× head gain, 15% gaze lead), `tobii-official-safe` (same but
-60°/40° caps), `x4-tuned` (X4 starting point: 1.8× head, 35% gaze lead, power
-curve, 35°/22° caps), `x4-legacy` (previous linear gaze-only behavior).
+60°/40° caps), `x4-tuned` (X4: OEM Tobii spline, head 1.0×, 25% gaze lead,
+180°/90° caps), `x4-legacy` (previous linear gaze-only behavior).
 
 In the GUI, every slider has a text override (type + Enter) and the preset
 dropdown has **Save** / **Save as…** / **Delete** buttons.

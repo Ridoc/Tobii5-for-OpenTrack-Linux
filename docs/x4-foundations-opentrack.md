@@ -168,16 +168,22 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
 
 **Built-in presets**: `tobii-official` (OEM curve + 180/90 caps),
 `tobii-official-safe` (same, 60/40 caps), **`x4-tuned`** (recommended X4
-starting point — 1.8× head gain, 35% gaze lead, power curve, 35°/22° caps,
-moderate and predictable), `x4-legacy` (previous linear gaze-only behavior).
-Save your tuned setup with `--save-preset <name>` or the GUI's **Save as…**.
+starting point — the Tobii spline does all the acceleration: head gain **1.0×**
+(never pre-multiply the head angle into the spline), 25% gaze lead, 180°/90°
+caps so the spline can breathe, smoothing 0.93, pos smoothing 0.96),
+`x4-legacy` (previous linear gaze-only behavior). Save your tuned setup with
+`--save-preset <name>` or the GUI's **Save as…**.
 
-> The OEM `tobii-official` curve couples `head_gain 2.0` with the spline's
-> edge expansion, so even small head shifts can reach the caps — great on a
-> Windows sim rig, usually too much for X4's cockpit. `x4-tuned` keeps the
-> Tobii feel (head-driven rotation + gaze lead) but 1:1-ish, so if it's still
-> too much, lower `Head gain` toward 1.0 or reduce the yaw/pitch caps; if it's
-> too little, raise `Head gain` and `Eye ratio`.
+> **Why the old `x4-tuned` was wrong**: `head_gain 1.8` pre-multiplied the head
+> angle *before* the spline, so a physical 10° turn became 15° of input, which
+> the spline (10→20, 20→75) mapped to ~45° — an accidental ~4.5× gain. And a
+> power curve with `curve_exp < 1.0` has an **infinite slope at zero**, so any
+> micro-movement leaving the deadzone caused a violent snap (the "jumps up").
+> The fix: let the spline own the acceleration (`head_gain 1.0`, `curve_mode 2`)
+> and keep caps at 180/90 so the curve isn't slammed into a brick wall.
+>
+> The Catmull-Rom evaluator clamps input to the last control point, so there's
+> no extrapolation past 35° yaw (which would otherwise shoot toward infinity).
 >
 > Camera jumps are suppressed two ways: the eye-origin midpoint only averages
 > **valid** eyes (a dropped eye otherwise shifts the reference), and every
