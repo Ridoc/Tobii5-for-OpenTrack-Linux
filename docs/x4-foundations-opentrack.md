@@ -168,7 +168,7 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
 
 **Built-in presets**: `tobii-official` (OEM curve + 180/90 caps),
 `tobii-official-safe` (same, 60/40 caps), **`x4-tuned`** (recommended X4
-starting point — 1.5× head gain, 25% gaze lead, power curve, 35°/22° caps,
+starting point — 1.8× head gain, 35% gaze lead, power curve, 35°/22° caps,
 moderate and predictable), `x4-legacy` (previous linear gaze-only behavior).
 Save your tuned setup with `--save-preset <name>` or the GUI's **Save as…**.
 
@@ -178,6 +178,10 @@ Save your tuned setup with `--save-preset <name>` or the GUI's **Save as…**.
 > Tobii feel (head-driven rotation + gaze lead) but 1:1-ish, so if it's still
 > too much, lower `Head gain` toward 1.0 or reduce the yaw/pitch caps; if it's
 > too little, raise `Head gain` and `Eye ratio`.
+>
+> Camera jumps are suppressed two ways: the eye-origin midpoint only averages
+> **valid** eyes (a dropped eye otherwise shifts the reference), and every
+> filter clamps its per-frame delta, so a glitch spike can't yank the view.
 
 ## Troubleshooting
 

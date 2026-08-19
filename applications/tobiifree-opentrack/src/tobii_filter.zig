@@ -95,8 +95,8 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .smoothing = 0.90,
         .pos_smoothing = 0.95,
         .deadzone = 0.2,
-        .head_gain = 1.5,
-        .eye_ratio = 0.25,
+        .head_gain = 1.8,
+        .eye_ratio = 0.35,
         .pos_gain = 1.5,
         .neck = 13.0,
         .curve_mode = 1,
@@ -255,20 +255,28 @@ pub const AdaptiveSmoother = struct {
 
     const target_dt: f64 = 0.0111; // ~90 Hz baseline
 
-    pub fn update(self: *AdaptiveSmoother, value: f64, dt: f64, rest_smoothing: f64) f64 {
+    /// Update with a per-frame delta clamp (`max_step`) to reject glitch
+    /// spikes (e.g. a one-eye drop shifting the eye-origin midpoint) before
+    /// the velocity-adaptive smoothing can propagate them.
+    pub fn update(self: *AdaptiveSmoother, value: f64, dt: f64, rest_smoothing: f64, max_step: f64) f64 {
         if (!self.init) {
             self.state = value;
             self.last_raw = value;
             self.init = true;
             return value;
         }
+        var v = value;
+        const delta = value - self.last_raw;
+        if (@abs(delta) > max_step) {
+            v = self.last_raw + std.math.sign(delta) * max_step;
+        }
         const dt_safe = @max(dt, 1e-6);
-        const vel = @abs(value - self.last_raw) / dt_safe;
-        self.last_raw = value;
+        const vel = @abs(v - self.last_raw) / dt_safe;
+        self.last_raw = v;
         const retention = retentionForVelocity(vel, rest_smoothing);
         const retention_dt = std.math.pow(f64, retention, dt_safe / target_dt);
         const ewma = 1.0 - retention_dt;
-        self.state += ewma * (value - self.state);
+        self.state += ewma * (v - self.state);
         return self.state;
     }
 };
@@ -370,14 +378,21 @@ pub const TobiiPipeline = struct {
     /// Process one gaze sample into a 6-DOF pose
     /// (X, Y, Z in cm; Yaw, Pitch, Roll in degrees).
     pub fn process(self: *TobiiPipeline, sample: *const core.GazeSample, p: *const Preset, dt: f64) [6]f64 {
-        const has_origins = (sample.present_mask &
-            (core.GAZE_BIT_EYE_ORIGIN_L | core.GAZE_BIT_EYE_ORIGIN_R)) != 0;
-
+        // Eye-origin midpoint from VALID eyes only (a dropped eye otherwise
+        // shifts the midpoint toward the remaining eye → camera yanks).
         var mid: [3]f64 = .{ 0, 0, 0 };
+        var n: usize = 0;
+        if (sample.validity_L == 0) {
+            for (0..3) |i| mid[i] += sample.eye_origin_L_mm[i];
+            n += 1;
+        }
+        if (sample.validity_R == 0) {
+            for (0..3) |i| mid[i] += sample.eye_origin_R_mm[i];
+            n += 1;
+        }
+        const has_origins = n > 0;
         if (has_origins) {
-            mid[0] = (sample.eye_origin_L_mm[0] + sample.eye_origin_R_mm[0]) * 0.5;
-            mid[1] = (sample.eye_origin_L_mm[1] + sample.eye_origin_R_mm[1]) * 0.5;
-            mid[2] = (sample.eye_origin_L_mm[2] + sample.eye_origin_R_mm[2]) * 0.5;
+            for (0..3) |i| mid[i] /= @as(f64, @floatFromInt(n));
             if (!self.ref_set) {
                 self.ref_mid = mid;
                 self.ref_set = true;
@@ -405,11 +420,11 @@ pub const TobiiPipeline = struct {
             head_pitch *= p.head_gain;
         }
 
-        // 3. blend (OEM 85/15) + velocity-adaptive smoothing.
+        // 3. blend (OEM 85/15) + velocity-adaptive smoothing with spike clamp.
         const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio;
         const raw_pitch = head_pitch + gaze_pitch * p.eye_ratio;
-        const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing);
-        const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing);
+        const yaw = self.rot_yaw.update(raw_yaw, dt, p.smoothing, 3.0);
+        const pitch = self.rot_pitch.update(raw_pitch, dt, p.smoothing, 3.0);
 
         // 4. response curve + cap + deadzone.
         const fy = deadzone(applyCurve(
@@ -432,9 +447,9 @@ pub const TobiiPipeline = struct {
         var py: f64 = 0;
         var pz: f64 = 0;
         if (p.send_position and has_origins and self.ref_set) {
-            px = self.pos_x.update((mid[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing);
-            py = self.pos_y.update((mid[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing);
-            pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing);
+            px = self.pos_x.update((mid[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
+            py = self.pos_y.update((mid[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
+            pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 0.5);
         }
 
         return .{ px, py, pz, fy, fp, 0 };
