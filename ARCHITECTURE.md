@@ -21,7 +21,7 @@
     wasm + WebUSB        daemon protocol
            │                    │
        ┌───┴───┐         ┌─────┴─────┐
-       │  ET5  │         │  tobiifreed   │──usb──▶ ET5
+       │  ET5  │         │  tobiifreedot   │──usb──▶ ET5
        └───────┘         └───────────┘
 ```
 
@@ -55,9 +55,9 @@ interface Source {
 | Source | Lang | Contains | Talks to |
 |---|---|---|---|
 | `UsbSource` | TS | wasm Tracker + WebUSB/node-usb Transport | ET5 directly |
-| `WsSource` | TS | WebSocket client | tobiifreed daemon |
+| `WsSource` | TS | WebSocket client | tobiifreedot daemon |
 | `UsbSource` | Zig | native Tracker + LibusbTransport | ET5 directly |
-| `SocketSource` | Zig | Unix socket client | tobiifreed daemon |
+| `SocketSource` | Zig | Unix socket client | tobiifreedot daemon |
 
 Sources with a Tracker run the TTP handshake and own protocol state.
 Sources without a Tracker speak daemon protocol — the daemon's Tracker does the work.
@@ -73,7 +73,7 @@ Sources that talk to a daemon do not — the daemon's Tracker handles it.
 
 **Who has a Tracker:**
 - `UsbSource` (TS) — via wasm
-- `tobiifreed` daemon (Zig) — native
+- `tobiifreedot` daemon (Zig) — native
 - `tobiifree-overlay --direct` (Zig) — native
 
 **Who does not:**
@@ -98,7 +98,7 @@ pub const Tracker = struct {
 ## Daemon Protocol
 
 Sources that connect through a daemon (WsSource, SocketSource) speak
-daemon protocol. This is the framing between daemon clients and tobiifreed:
+daemon protocol. This is the framing between daemon clients and tobiifreedot:
 
 ```
 [u8 msg_type] [u32 LE payload_len] [payload...]
@@ -132,7 +132,7 @@ daemon protocol. This is the framing between daemon clients and tobiifreed:
 | `display_area` | 0x03 | 9×f64 corners |
 | `err` | 0xFF | error code (u32) |
 
-## tobiifreed (daemon)
+## tobiifreedot (daemon)
 
 The daemon owns the USB device and its Tracker. It:
 
@@ -145,7 +145,7 @@ The daemon owns the USB device and its Tracker. It:
 ```
 ┌─────────┐      ┌─────────┐      ┌──────────┐
 │ Browser  │─ws──▶│         │      │          │
-│          │      │ tobiifreed  │─usb──▶  ET5     │
+│          │      │ tobiifreedot  │─usb──▶  ET5     │
 │ App      │─sock▶│         │      │          │
 └─────────┘      └─────────┘      └──────────┘
 ```
@@ -154,7 +154,7 @@ The daemon owns the USB device and its Tracker. It:
 
 - [x] `UsbSource` — TS (WebUSB + wasm), currently named `Tracker` class
 - [x] `SocketSource` — Zig native (Unix socket, gaze only)
-- [x] `WsServer` in tobiifreed (gaze + command forwarding)
+- [x] `WsServer` in tobiifreedot (gaze + command forwarding)
 - [x] Daemon protocol: command forwarding (display area, calibration, realm)
 - [ ] Refactor TS `Tracker` class → `Source` interface + `UsbSource` impl
 - [ ] `WsSource` — TS (WebSocket client implementing `Source`)

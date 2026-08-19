@@ -1,4 +1,5 @@
-// socket_source.zig — GazeSource backend that connects to tobiifreed over a unix socket.
+// socket_source.zig — GazeSource backend that connects to the TobiiFreedOT daemon
+// over a unix socket.
 //
 // Receives gaze samples broadcast by the daemon. Sends commands for
 // display area, realm, calibration, etc.
@@ -55,7 +56,7 @@ pub const SocketSource = struct {
         const n = proto.encodeCmd(&cmd_buf, .subscribe, &payload);
         _ = std.posix.write(fd, cmd_buf[0..n]) catch {};
 
-        log.info("connected to tobiifreed", .{});
+        log.info("connected to tobiifreedot", .{});
         return .{
             .fd = fd,
             .gaze_cb = null,

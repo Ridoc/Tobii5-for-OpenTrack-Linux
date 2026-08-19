@@ -1,4 +1,4 @@
-// ws_server.zig — WebSocket server for tobiifreed.
+// ws_server.zig — WebSocket server for tobiifreedot (TobiiFreedOT).
 //
 // Accepts browser clients over TCP, performs the HTTP upgrade handshake,
 // and broadcasts gaze samples as binary WebSocket frames.

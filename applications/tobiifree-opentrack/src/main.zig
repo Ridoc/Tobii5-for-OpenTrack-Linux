@@ -8,6 +8,9 @@
 //
 // Ships with a small GTK4 status window showing the live pose values; pass
 // --headless to run console-only (e.g. under X4's built-in OpenTrack Support).
+//
+// Driver/protocol modules imported from Aetherall/tobiifree (GPL-3.0) by
+// Aetherall — see LICENSE and README for credits.
 
 const std = @import("std");
 const core = @import("tobiifree_core");

@@ -42,8 +42,8 @@
         '';
       };
 
-    tobiifreed = mkZigApp {
-      name = "tobiifreed";
+    tobiifreedot = mkZigApp {
+      name = "tobiifreedot";
       dir = "applications/tobiifreed";
       buildInputs = [pkgs.libusb1];
     };
@@ -98,8 +98,8 @@
     };
   in {
     packages.${system} = {
-      inherit tobiifreed tobiifree-overlay tobiifree-opentrack tobiifree-demo;
-      default = tobiifreed;
+      inherit tobiifreedot tobiifree-overlay tobiifree-opentrack tobiifree-demo;
+      default = tobiifreedot;
     };
 
     devShells.${system}.default = pkgs.mkShell {

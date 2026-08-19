@@ -20,8 +20,8 @@ camera) using **gaze + eye-origin derived pose** as the signal source.
   `proto-udp/ftnoir_protocol_ftn.cpp`.
 - **tobiifree** (the fork base):
   - Zig protocol driver (`driver/`) decoding the Tobii ET5's native TTP stream, plus a
-    daemon **`tobiifreed`** that owns the USB device and exposes gaze over a Unix socket
-    (`$XDG_RUNTIME_DIR/tobiifreed/gaze.sock`).
+    daemon **`tobiifreedot`** (TobiiFreedOT) that owns the USB device and exposes gaze over a Unix socket
+    (`$XDG_RUNTIME_DIR/tobiifreedot/gaze.sock`).
   - Daemon protocol: `[u8 msg_type][u32 LE payload_len][payload]`. Client sends `subscribe`
     (0x01); daemon streams `gaze` (0x01) messages whose payload is the full raw
     `core.GazeSample` struct, including:
@@ -47,7 +47,7 @@ camera) using **gaze + eye-origin derived pose** as the signal source.
 
 ```
 Tobii ET5 (USB)
-  → tobiifreed  (existing tobiifree daemon; owns USB + calibration)
+  → tobiifreedot  (existing tobiifree daemon, renamed to TobiiFreedOT; owns USB + calibration)
   → Unix socket gaze stream (full GazeSample)
   → tobiifree-opentrack  (NEW app in the fork; the bridge)
       • subscribe to daemon gaze
@@ -65,11 +65,11 @@ No OpenTrack GUI, no Wine, no DLL injection required. Recenter is handled by X4 
 ### Phase 1 — Fork + bridge app (core)
 
 1. Fork `Aetherall/tobiifree` (keep GPL-3.0).
-2. Add new app `applications/tobiifree-opentrack/` (Zig, mirrors `tobiifreed` build layout;
+2. Add new app `applications/tobiifree-opentrack/` (Zig, mirrors the `tobiifreed` folder layout;
    stdlib + libc only):
    - `build.zig` — depends on `driver`, exposes the executable.
    - `src/main.zig`:
-     - Connect to `$XDG_RUNTIME_DIR/tobiifreed/gaze.sock`, send `subscribe`, decode
+     - Connect to `$XDG_RUNTIME_DIR/tobiifreedot/gaze.sock`, send `subscribe`, decode
        `GazeSample` (reuse `daemon_protocol.zig` framing).
      - **Gaze → rotation** (defaults from Tobii; all CLI-configurable):
        - `yaw   = (gaze_x − 0.5) × 2 × MAX_YAW`   (default MAX_YAW = 37.5°, → ±37.5° at screen edge; +50% over Tobii's 25°)
@@ -85,7 +85,7 @@ No OpenTrack GUI, no Wine, no DLL injection required. Recenter is handled by X4 
      - Send 48-byte little-endian UDP datagrams to `127.0.0.1:4242` at device rate (~60 Hz).
      - CLI flags: `--host`, `--port`, `--yaw-gain`, `--pitch-gain`, `--smoothing`,
        `--deadzone`.
-3. Docs: build (`zig build`), run order (`tobiifreed` → `tobiifree-opentrack` → X4), in-game
+3. Docs: build (`zig build`), run order (`tobiifreedot` → `tobiifree-opentrack` → X4), in-game
    setup.
 
 ### Phase 2 — Validation & tuning
@@ -113,7 +113,7 @@ docs/x4-foundations-opentrack.md
 ## Verification Checklist
 
 - [x] `zig build` for `tobiifree-opentrack` succeeds. *(verified: Debug + `-Doptimize=ReleaseSafe` + `nix build .#tobiifree-opentrack`)*
-- [x] `tobiifreed` streaming (gaze logs visible), socket exists. *(verified on live ET5: `2104:0313`, socket at `$XDG_RUNTIME_DIR/tobiifreed/gaze.sock`)*
+- [x] `tobiifreedot` streaming (gaze logs visible), socket exists. *(verified on live ET5: `2104:0313`, socket at `$XDG_RUNTIME_DIR/tobiifreedot/gaze.sock`)*
 - [x] Bridge connects, subscribes, and decodes `GazeSample`. *(verified live; log shows head reference + yaw/pitch from real gaze)*
 - [x] UDP packets captured on `127.0.0.1:4242` (48 B, 6 doubles, ~60 Hz). *(verified live: 48 B LE doubles; observed ~33 Hz at the device/daemon rate — actual rate tracks the device, not the bridge)*
 - [ ] X4 (native Linux): *Options → Controls → OpenTrack Support* → "Connected". *(needs game running)*

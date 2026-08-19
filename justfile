@@ -93,33 +93,33 @@ overlay-dev:
     done
 
 # -------------------------------------------------------------------
-# Daemon (tobiifreed)
+# Daemon (tobiifreedot / TobiiFreedOT)
 # -------------------------------------------------------------------
 
 # Build and run the gaze daemon (add --ws to enable WebSocket)
-tobiifreed *ARGS:
+tobiifreedot *ARGS:
     cd applications/tobiifreed && zig build run -- {{ARGS}}
 
 # Build the daemon binary
-build-tobiifreed:
+build-tobiifreedot:
     cd applications/tobiifreed && zig build -Doptimize=ReleaseSafe
 
 # Hot-reload daemon: rebuild + restart on source change
-tobiifreed-dev:
+tobiifreedot-dev:
     #!/usr/bin/env bash
     DIR=applications/tobiifreed
     SRC="$DIR/src $DIR/build.zig driver/src"
-    LOG="$DIR/tobiifreed.log"
+    LOG="$DIR/tobiifreedot.log"
     PID=""
-    cleanup() { pkill -f 'zig-out/bin/tobiifreed' 2>/dev/null; exit 0; }
+    cleanup() { pkill -f 'zig-out/bin/tobiifreedot' 2>/dev/null; exit 0; }
     trap cleanup INT TERM EXIT
     while true; do
         echo ":: building..."
         > "$LOG"
         if (cd "$DIR" && zig build) >> "$LOG" 2>&1; then
-            pkill -f 'zig-out/bin/tobiifreed' 2>/dev/null; sleep 0.3
-            echo ":: starting tobiifreed"
-            "$DIR/zig-out/bin/tobiifreed" >> "$LOG" 2>&1 &
+            pkill -f 'zig-out/bin/tobiifreedot' 2>/dev/null; sleep 0.3
+            echo ":: starting tobiifreedot"
+            "$DIR/zig-out/bin/tobiifreedot" >> "$LOG" 2>&1 &
             PID=$!
         else
             echo ":: build failed:"
@@ -149,7 +149,7 @@ try-overlay-daemon:
     LOGFIFO=$(mktemp -u); mkfifo "$LOGFIFO"
     sed -u 's/^/[daemon] /' < "$LOGFIFO" &
     SED_PID=$!
-    applications/tobiifreed/zig-out/bin/tobiifreed > "$LOGFIFO" 2>&1 &
+    applications/tobiifreed/zig-out/bin/tobiifreedot > "$LOGFIFO" 2>&1 &
     DAEMON_PID=$!
     rm "$LOGFIFO"
     cleanup() { kill $DAEMON_PID 2>/dev/null; wait $DAEMON_PID 2>/dev/null; kill $SED_PID 2>/dev/null; wait $SED_PID 2>/dev/null; }
@@ -163,13 +163,13 @@ try-overlay-daemon:
 try-daemon *ARGS:
     #!/usr/bin/env bash
     (cd applications/tobiifreed && zig build) 2>&1 || exit 1
-    timeout 3 applications/tobiifreed/zig-out/bin/tobiifreed {{ARGS}} 2>&1; true
+    timeout 3 applications/tobiifreed/zig-out/bin/tobiifreedot {{ARGS}} 2>&1; true
 
 # -------------------------------------------------------------------
 # OpenTrack bridge (X4: Foundations)
 # -------------------------------------------------------------------
 
-# Build and run the OpenTrack bridge (run tobiifreed first)
+# Build and run the OpenTrack bridge (run tobiifreedot first)
 opentrack *ARGS:
     cd applications/tobiifree-opentrack && zig build run -- {{ARGS}}
 

@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "tobiifreed",
+        .name = "tobiifreedot",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -86,6 +86,6 @@ pub fn build(b: *std.Build) void {
 
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
-    const run_step = b.step("run", "Run tobiifreed");
+    const run_step = b.step("run", "Run tobiifreedot");
     run_step.dependOn(&run.step);
 }

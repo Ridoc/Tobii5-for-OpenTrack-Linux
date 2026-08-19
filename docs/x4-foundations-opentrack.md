@@ -11,8 +11,8 @@ UDP listener**. No OpenTrack GUI, no Wine, no DLL injection.
 
 ```
 Tobii ET5 (USB)
-  → tobiifreed            (daemon; owns USB + calibration, exposes gaze)
-  → unix socket gaze      ($XDG_RUNTIME_DIR/tobiifreed/gaze.sock)
+  → tobiifreedot         (daemon "TobiiFreedOT"; owns USB + calibration, exposes gaze)
+  → unix socket gaze      ($XDG_RUNTIME_DIR/tobiifreedot/gaze.sock)
   → tobiifree-opentrack   (this bridge)
   → UDP 127.0.0.1:4242    (48 B = X,Y,Z,Yaw,Pitch,Roll as little-endian doubles)
   → X4: Foundations       (native Linux, OpenTrack Support)
@@ -70,7 +70,7 @@ sudo cp assets/99-tobii.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 
 # 2. daemon — owns the USB device
-applications/tobiifreed/zig-out/bin/tobiifreed
+applications/tobiifreed/zig-out/bin/tobiifreedot
 
 # 3. bridge — streams to X4's OpenTrack UDP port
 applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack
@@ -129,7 +129,7 @@ sliders (or typed into the entry and confirmed with Enter).
 
 ## Troubleshooting
 
-- **"cannot connect to tobiifreed"** — start the daemon first; it must own the
+- **"cannot connect to tobiifreedot"** — start the daemon first; it must own the
   USB device. `$XDG_RUNTIME_DIR` must be set (it is on normal desktop sessions).
 - **No samples, "no eyes detected"** — tracker isn't seeing you (range/angle),
   or calibration is off. Run the browser demo (`just demo`) to check raw gaze.

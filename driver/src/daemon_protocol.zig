@@ -1,4 +1,4 @@
-// daemon_protocol.zig — wire format for tobiifreed unix socket IPC.
+// daemon_protocol.zig — wire format for the TobiiFreedOT daemon unix socket IPC.
 //
 // Framing:  [u8 msg_type] [u32 LE payload_len] [payload...]
 //
@@ -15,7 +15,7 @@ pub const HEADER_SIZE = 5; // 1 byte type + 4 bytes length
 
 pub fn socketPath(buf: *[512]u8) ?[]const u8 {
     const runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse "/tmp";
-    return std.fmt.bufPrint(buf, "{s}/tobiifreed/gaze.sock", .{runtime_dir}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/tobiifreedot/gaze.sock", .{runtime_dir}) catch null;
 }
 
 // ── Daemon → Client message types ───────────────────────────────────

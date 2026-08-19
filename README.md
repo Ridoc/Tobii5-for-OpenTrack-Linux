@@ -7,8 +7,8 @@ gaze + eye-origin data, streamed over the standard OpenTrack UDP protocol.
 
 ```
 Tobii ET5 (USB)
-  → tobiifreed          daemon (owns USB + calibration, streams gaze)
-  → unix socket gaze    $XDG_RUNTIME_DIR/tobiifreed/gaze.sock
+  → tobiifreedot        daemon (TobiiFreedOT; owns USB + calibration, streams gaze)
+  → unix socket gaze    $XDG_RUNTIME_DIR/tobiifreedot/gaze.sock
   → tobiifree-opentrack  this bridge (gaze → head pose, EMA + deadzone)
   → UDP 127.0.0.1:4242  48 B: X,Y,Z,Yaw,Pitch,Roll as little-endian doubles
   → any OpenTrack-capable game   (e.g. X4: Foundations, built-in support, 7.50 beta+)
@@ -62,7 +62,7 @@ nix develop -c bash -c "cd applications/tobiifreed && zig build run"
 nix develop -c bash -c "cd applications/tobiifree-opentrack && zig build run"
 ```
 
-(or `just tobiifreed` then `just opentrack` inside the dev shell.)
+(or `just tobiifreedot` then `just opentrack` inside the dev shell.)
 
 You should see the bridge log its first sample quickly:
 
@@ -110,8 +110,8 @@ Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md
 - **`applications/tobiifree-opentrack/`** — the OpenTrack bridge with a GTK4
   status window (live pose + sensitivity sliders; `--headless` for console-only).
 - **`driver/`** — TTP/TLV protocol engine for the ET5 (from upstream tobiifree).
-- **`applications/tobiifreed/`** — Linux daemon; owns the USB device, exposes
-  gaze over a Unix socket.
+- **`applications/tobiifreed/`** — Linux daemon **`tobiifreedot`** (TobiiFreedOT);
+  owns the USB device, exposes gaze over a Unix socket.
 - **`applications/tobiifree-overlay/`** — GTK4 gaze-dot overlay.
 - **`sdk/` + `applications/tobiifree-demo/`** — browser demo (calibration, display
   area).
@@ -127,5 +127,10 @@ OpenTrack head-pose protocol.
 ## License & credits
 
 [GPL-3.0](LICENSE). This is a fork of
-[Aetherall/tobiifree](https://github.com/Aetherall/tobiifree) — the ET5 driver,
-daemon, and protocol work is theirs; this repo adds the OpenTrack bridge.
+**[Aetherall/tobiifree](https://github.com/Aetherall/tobiifree)** by
+**[Aetherall](https://github.com/Aetherall)**, licensed under the GNU General
+Public License v3.0. Under GPLv3's strong copyleft, this project is also
+distributed under GPL-3.0: the ET5 driver, daemon, and protocol work is theirs;
+this repo adds the OpenTrack bridge and renames the daemon to **TobiifreedOT**
+(`tobiifreedot`). If you modify or redistribute this code, your changes must
+stay GPL-3.0 and credit the upstream work above.

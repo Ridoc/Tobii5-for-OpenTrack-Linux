@@ -1,4 +1,4 @@
-// server.zig — unix socket server for tobiifreed.
+// server.zig — unix socket server for tobiifreedot (TobiiFreedOT).
 //
 // Accepts client connections, broadcasts gaze samples, dispatches commands.
 // Single-threaded, non-blocking. Fixed-size client array (no allocator).

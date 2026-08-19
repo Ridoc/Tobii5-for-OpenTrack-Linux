@@ -1,11 +1,15 @@
-// tobiifreed — eye tracker daemon.
+// tobiifreedot (TobiiFreedOT) — eye tracker daemon.
 //
 // Owns the USB connection to the Tobii ET5 and exposes gaze data
 // over a unix socket. Multiple clients can connect simultaneously.
 //
 // Usage:
-//   tobiifreed                   # run with defaults or ~/.config/tobii.json
-//   tobiifreed --init-config     # create default config file
+//   tobiifreedot                  # run with defaults or ~/.config/tobii.json
+//   tobiifreedot --init-config    # create default config file
+//
+// Upstream: Aetherall/tobiifree (https://github.com/Aetherall/tobiifree)
+// by Aetherall — GPL-3.0. This is a renamed fork of the upstream
+// `tobiifreed` daemon; see LICENSE and README for credits.
 
 const std = @import("std");
 const core = @import("tobiifree_core");
@@ -14,7 +18,7 @@ const LibusbTransport = @import("libusb_transport").LibusbTransport;
 const Server = @import("server").Server;
 const WsServer = @import("ws_server").WsServer;
 
-const log = std.log.scoped(.tobiifreed);
+const log = std.log.scoped(.tobiifreedot);
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
