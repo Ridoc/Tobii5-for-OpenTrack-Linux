@@ -4,6 +4,11 @@ Bridge that makes a **Tobii Eye Tracker 5** drive the cockpit camera in the
 **native Linux build of X4: Foundations** through X4's built-in **OpenTrack
 UDP listener**. No OpenTrack GUI, no Wine, no DLL injection.
 
+> The bridge is a **generic OpenTrack source** — it streams to
+> `127.0.0.1:4242` and works with *any* OpenTrack/FreeTrack-capable game
+> (flight/racing/space sims, etc., see the README for the compatibility list).
+> X4: Foundations is the primary, fully-native example used throughout this doc.
+
 ```
 Tobii ET5 (USB)
   → tobiifreed            (daemon; owns USB + calibration, exposes gaze)
