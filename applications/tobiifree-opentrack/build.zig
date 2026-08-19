@@ -84,6 +84,16 @@ pub fn build(b: *std.Build) void {
     usb_source.addImport("gaze_source", gaze_source);
     socket_source.addImport("gaze_source", gaze_source);
 
+    // Tobii-feel filtering pipeline (gaze filter, head pose, curve, presets).
+    const tobii_filter = b.createModule(.{
+        .root_source_file = b.path("src/tobii_filter.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "tobiifree_core", .module = tobiifree_core },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "tobiifree-opentrack",
         .root_module = b.createModule(.{
@@ -94,6 +104,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "tobiifree_core", .module = tobiifree_core },
                 .{ .name = "daemon_protocol", .module = daemon_protocol },
                 .{ .name = "socket_source", .module = socket_source },
+                .{ .name = "tobii_filter", .module = tobii_filter },
             },
         }),
     });

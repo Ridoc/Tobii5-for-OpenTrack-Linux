@@ -9,7 +9,8 @@ gaze + eye-origin data, streamed over the standard OpenTrack UDP protocol.
 Tobii ET5 (USB)
   → tobiifreedot        daemon (TobiiFreedOT; owns USB + calibration, streams gaze)
   → unix socket gaze    $XDG_RUNTIME_DIR/tobiifreedot/gaze.sock
-  → tobiifree-opentrack  this bridge (gaze → head pose, EMA + deadzone)
+  → tobiifree-opentrack  this bridge (Tobii-feel pipeline: gaze filter, head pose,
+                          adaptive smoothing, 85/15 blend, response curve, presets)
   → UDP 127.0.0.1:4242  48 B: X,Y,Z,Yaw,Pitch,Roll as little-endian doubles
   → any OpenTrack-capable game   (e.g. X4: Foundations, built-in support, 7.50 beta+)
 ```
@@ -72,9 +73,10 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 ```
 
 The bridge opens a small **GTK4 status window** showing the live pose values
-(X/Y/Z, Yaw/Pitch/Roll) with **live tuning sliders** for yaw/pitch gains,
-smoothing, and deadzone (plus manual text overrides) — all apply to the stream
-immediately, no restart needed. Pass `--headless` for console-only operation.
+(X/Y/Z, Yaw/Pitch/Roll) with **live tuning sliders** and a **preset system** —
+switch between built-in profiles (`tobii-official`, `tobii-official-safe`,
+`x4-legacy`) or save your own. All changes apply to the stream immediately, no
+restart needed. Pass `--headless` for console-only operation.
 
 ### In-game setup
 
@@ -89,26 +91,42 @@ them at UDP `127.0.0.1:4242` and set up recenter/hotkeys per the game.
 
 ## Tuning
 
-All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`):
+All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`) and
+live sliders in the GUI. Settings are grouped into **presets** stored in
+`$XDG_CONFIG_HOME/tobiifree-opentrack/presets.json` (built-ins are seeded from
+code). Key parameters:
 
-| Flag | Default | Meaning |
+| Flag | Default (`tobii-official`) | Meaning |
 |---|---|---|
-| `--yaw-gain` | `37.5` | degrees of yaw at the screen edges |
-| `--pitch-gain` | `22.5` | degrees of pitch at the screen edges |
-| `--smoothing` | `0.3` | EMA alpha — higher = more responsive |
-| `--deadzone` | `0.2` | degrees of yaw/pitch deadzone near center |
+| `--preset <name>` | `tobii-official` | load a preset (built-in or saved) |
+| `--save-preset <name>` | — | save current settings as a preset and exit |
+| `--yaw-gain` | `180` | yaw output cap (degrees) |
+| `--pitch-gain` | `90` | pitch output cap (degrees) |
+| `--head-gain` | `2.0` | head-sensitivity multiplier (10° head → 20° cam) |
+| `--eye-ratio` | `0.15` | gaze contribution to rotation (OEM 85/15) |
+| `--curve` | `tobii` | response curve: `linear` / `power` / `tobii` |
+| `--smoothing` | `0.90` | rotation rest retention (Accela-style, velocity-adaptive) |
+| `--pos-smoothing` | `0.95` | translation rest retention (heavier) |
+| `--deadzone` | `0.15` | degrees of yaw/pitch deadzone near center |
+| `--neck` | `13` | neck-pivot distance (cm) used for head-rotation derivation |
+| `--flip-yaw` / `--flip-pitch` | — | invert head rotation direction |
 | `--no-position` | — | rotation-only (zeros for head X/Y/Z) |
 | `--headless` | — | no GUI window, console logging only |
 
-In the GUI, the yaw/pitch gains (`--yaw-gain`/`--pitch-gain`), smoothing, and
-deadzone can all be tuned live with the sliders or a typed value + Enter.
+**Built-in presets**: `tobii-official` (OEM defaults: Tobii spline curve,
+180°/90° caps, 2× head gain, 15% gaze lead), `tobii-official-safe` (same but
+60°/40° caps for X4), `x4-legacy` (previous linear gaze-only behavior).
+
+In the GUI, every slider has a text override (type + Enter) and the preset
+dropdown has **Save** / **Save as…** / **Delete** buttons.
 
 Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md).
 
 ## What's here
 
 - **`applications/tobiifree-opentrack/`** — the OpenTrack bridge with a GTK4
-  status window (live pose + sensitivity sliders; `--headless` for console-only).
+  status window (live pose + tuning sliders + presets; `--headless` for
+  console-only).
 - **`driver/`** — TTP/TLV protocol engine for the ET5 (from upstream tobiifree).
 - **`applications/tobiifreed/`** — Linux daemon **`tobiifreedot`** (TobiiFreedOT);
   owns the USB device, exposes gaze over a Unix socket.

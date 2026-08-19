@@ -20,14 +20,16 @@ Tobii ET5 (USB)
 
 ## What you get
 
-The primary Tobii experience in X4: **the cockpit camera follows where you
-look** (eye-aim-driven head-look), plus small head-position movement from the
+The Tobii "Extended View" experience in X4: rotation driven mostly by your
+**head** (approximated from the eye-origin midpoint around a neck pivot) with a
+gentle **gaze lead** (OEM 85/15 blend), plus head-position movement from the
 tracker's eye-origin triangulation:
 
-- **Yaw/Pitch** from binocular 2D gaze — default ±37.5°/±22.5° at screen edges
-  (tuned +50% over Tobii Game Hub's default "Maximal Gaze Angle" ≈ 25°).
+- **Yaw/Pitch** — head-rotation estimate + 15% smoothed-gaze lead, mapped
+  through a Tobii response curve (default `tobii` spline: 2° deadzone,
+  10°→20°, 20°→75°, 35°→180°).
 - **X/Y/Z head position** from the midpoint of the calibrated eye origins
-  (mm → cm), referenced once at startup.
+  (mm → cm, ×2 default), referenced once at startup.
 - **Roll = 0** (real head roll needs the IR-frame pipeline of Phase 3).
 
 Scope limitation: the OpenTrack protocol carries head pose only. X4's
@@ -85,22 +87,33 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 
 ## Status window (GTK4)
 
-By default the bridge opens a small GTK4 window showing the live pose values
-(X/Y/Z in cm, Yaw/Pitch/Roll in degrees) plus a status line ("Eyes: tracked" /
-"Eyes: lost") and live **tuning sliders**:
+By default the bridge opens a GTK4 window showing the live pose values (X/Y/Z
+in cm, Yaw/Pitch/Roll in degrees), a status line ("Eyes: tracked" / "Eyes:
+lost"), a **preset dropdown** (Save / Save as… / Delete), and live **tuning
+sliders** grouped into **Sensitivity** and **Tobii feel** sections:
 
-- **Yaw / Pitch** — the `--yaw-gain` / `--pitch-gain` degrees at the screen
-  edge (0–90°).
-- **Smoothing** — the EMA alpha (`--smoothing`, 0.05–0.6): lower = smoother,
-  higher = more responsive. If the view is wobbly, lower this.
-- **Deadzone** — the yaw/pitch deadzone (`--deadzone`, 0–3°).
+- **Yaw cap / Pitch cap** — output caps in degrees (the official `tobii` curve
+  reaches 180°/90°; X4 usually wants 60°/40° or less).
+- **Smoothing / Pos smoothing** — Accela-style **velocity-adaptive** retention
+  (defaults 0.90 / 0.95 at rest, dropping toward 0.05 at 180°/s flicks). Lower
+  = more responsive, higher = smoother. If the view is wobbly, raise it.
+- **Deadzone** — center stabilization, 0–3°.
+- **Head gain** — head-sensitivity multiplier (2.0 = 10° head → 20° cam).
+- **Eye ratio** — the gaze lead blended into rotation (OEM 0.15 = 85/15).
+- **Pos gain** — translation multiplier (default 2.0, so you don't lean out of
+  your chair).
+- **Neck (cm)** — neck-pivot distance used to derive head yaw/pitch from the
+  eye-origin midpoint (default 13).
+- **Gaze yaw/pitch scale** — gaze → angle at the screen edge (40°/30°).
+- **Curve** — `Linear` / `Power` / `Tobii` response-curve modes.
+- **Curve exp** — power-curve exponent (default 0.5 expands the edges).
+- **Flip yaw / Flip pitch** — invert head-rotation direction if it feels wrong.
 
 The **text entry** next to each slider is a manual override — type a value and
-press Enter to set it precisely. Everything applies immediately to the outgoing
-stream, no restart needed. The socket is polled at 125 Hz so the game receives
-a steady stream (matching the `--headless` loop), while the labels refresh at
-~30 Hz. Pass `--headless` to run console-only (e.g. inside X4's built-in
-OpenTrack Support, or on a system without a display).
+press Enter. Everything applies immediately to the outgoing stream, no restart
+needed. The socket is polled at 125 Hz so the game receives a steady stream,
+while the labels refresh at ~30 Hz. Pass `--headless` to run console-only (e.g.
+inside X4's built-in OpenTrack Support, or on a system without a display).
 
 ## In-game setup (X4: Foundations, native Linux)
 
@@ -111,26 +124,52 @@ OpenTrack Support, or on a system without a display).
 
 ## Tuning
 
-All tunables are CLI flags on the bridge:
+All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`) and
+live sliders in the GUI. Settings live in **presets** — built-ins seeded from
+code, user presets persisted to `$XDG_CONFIG_HOME/tobiifree-opentrack/presets.json`:
 
-| Flag | Default | Meaning |
+| Flag | Default (`tobii-official`) | Meaning |
 |---|---|---|
 | `--host` | `127.0.0.1` | UDP target host |
 | `--port` | `4242` | UDP target port (X4's listener) |
-| `--yaw-gain` | `37.5` | degrees of yaw at the left/right screen edge |
-| `--pitch-gain` | `22.5` | degrees of pitch at the top/bottom screen edge |
-| `--smoothing` | `0.3` | EMA alpha (0..1]; higher = more responsive, lower = smoother |
-| `--deadzone` | `0.2` | degrees of yaw/pitch deadzone near center |
+| `--preset <name>` | `tobii-official` | load a preset |
+| `--list-presets` | — | list presets and exit |
+| `--save-preset <name>` | — | save current settings as a preset and exit |
+| `--yaw-gain` | `180` | yaw output cap (degrees) |
+| `--pitch-gain` | `90` | pitch output cap (degrees) |
+| `--smoothing` | `0.90` | rotation rest retention (velocity-adaptive) |
+| `--pos-smoothing` | `0.95` | translation rest retention (heavier) |
+| `--deadzone` | `0.15` | degrees of yaw/pitch deadzone near center |
+| `--head-gain` | `2.0` | head-sensitivity multiplier |
+| `--eye-ratio` | `0.15` | gaze lead (OEM 85/15) |
+| `--pos-gain` | `2.0` | translation multiplier |
+| `--neck` | `13` | neck-pivot distance (cm) |
+| `--gaze-scale` | `40` | gaze → yaw at screen edge (degrees) |
+| `--gaze-scale-pitch` | `30` | gaze → pitch at screen edge (degrees) |
+| `--curve` | `tobii` | response curve: `linear` / `power` / `tobii` |
+| `--curve-exp` | `0.5` | power-curve exponent |
+| `--flip-yaw` / `--flip-pitch` | — | invert head rotation direction |
 | `--no-position` | — | send zeros for head X/Y/Z (rotation-only mode) |
 | `-v` / `--verbose` | — | per-sample logging |
 
 X4 applies angles and position 1:1 (`opentrackanglefactor`/`opentrackpositionfactor`
 are 1.0 by default, and OpenTrack's own filters aren't in the path), so the bridge
-is the only place to tune. Defaults are tuned +50% over Tobii's 25°/15° for more
-rotation: yaw 37.5°, pitch 22.5°, smoothing 0.3, deadzone 0.2°. If the camera feels
-sluggish, raise smoothing; if it feels twitchy, lower it and raise the deadzone.
-In the GUI the Yaw/Pitch gains, Smoothing, and Deadzone can all be adjusted
-live with the sliders (or typed into the entries and confirmed with Enter).
+is the only place to tune. The pipeline replicates the OEM Tobii feel:
+
+1. **Gaze** — 3-state dynamic EWMA (fixation 0.03 / pursuit 0.25 / saccade 0.015,
+   time-corrected) so saccades never whip the camera.
+2. **Head** — yaw/pitch derived from the eye-origin midpoint around a neck pivot
+   (`atan2(Δx, neck−Δz)`), ×`head_gain`.
+3. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
+4. **Smoothing** — velocity-adaptive retention (0.90 at rest → 0.05 at 180°/s),
+   time-corrected per frame; translation uses the heavier `pos_smoothing`.
+5. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
+   pitch) or `power`/`linear`, capped by the yaw/pitch gains, then the deadzone.
+
+**Built-in presets**: `tobii-official` (OEM curve + 180/90 caps), 
+`tobii-official-safe` (same, 60/40 caps — recommended starting point for X4),
+`x4-legacy` (previous linear gaze-only behavior). Save your tuned setup with
+`--save-preset <name>` or the GUI's **Save as…**.
 
 ## Troubleshooting
 
@@ -153,7 +192,9 @@ live with the sliders (or typed into the entries and confirmed with Enter).
 ```
 applications/tobiifree-opentrack/
   build.zig          # module graph mirrors the other native apps; links driver
-  src/main.zig       # socket client → gaze→pose → UDP; CLI tunables
+  src/main.zig       # socket client → Tobii-feel pipeline → UDP; CLI + GTK4 GUI
+  src/tobii_filter.zig # gaze state filter, head pose, adaptive smoothing,
+                       # response curve, preset persistence (JSON)
 docs/x4-foundations-opentrack.md   # this file
 ```
 
