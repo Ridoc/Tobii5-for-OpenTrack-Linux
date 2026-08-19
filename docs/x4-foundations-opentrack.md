@@ -166,10 +166,18 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
 5. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
    pitch) or `power`/`linear`, capped by the yaw/pitch gains, then the deadzone.
 
-**Built-in presets**: `tobii-official` (OEM curve + 180/90 caps), 
-`tobii-official-safe` (same, 60/40 caps — recommended starting point for X4),
-`x4-legacy` (previous linear gaze-only behavior). Save your tuned setup with
-`--save-preset <name>` or the GUI's **Save as…**.
+**Built-in presets**: `tobii-official` (OEM curve + 180/90 caps),
+`tobii-official-safe` (same, 60/40 caps), **`x4-tuned`** (recommended X4
+starting point — 1.5× head gain, 25% gaze lead, power curve, 35°/22° caps,
+moderate and predictable), `x4-legacy` (previous linear gaze-only behavior).
+Save your tuned setup with `--save-preset <name>` or the GUI's **Save as…**.
+
+> The OEM `tobii-official` curve couples `head_gain 2.0` with the spline's
+> edge expansion, so even small head shifts can reach the caps — great on a
+> Windows sim rig, usually too much for X4's cockpit. `x4-tuned` keeps the
+> Tobii feel (head-driven rotation + gaze lead) but 1:1-ish, so if it's still
+> too much, lower `Head gain` toward 1.0 or reduce the yaw/pitch caps; if it's
+> too little, raise `Head gain` and `Eye ratio`.
 
 ## Troubleshooting
 
