@@ -73,10 +73,12 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 ```
 
 The bridge opens a small **GTK4 status window** showing the live pose values
-(X/Y/Z, Yaw/Pitch/Roll) with **live tuning sliders** and a **preset system** —
+(X/Y/Z, Yaw/Pitch/Roll) with a **live eye/head visualization** (gaze point on
+a mini screen + a head figure showing the yaw/pitch estimation), **live tuning
+sliders** and a **preset system** —
 switch between built-in profiles (`tobii-official`, `tobii-official-safe`,
-`x4-legacy`) or save your own. All changes apply to the stream immediately, no
-restart needed. Pass `--headless` for console-only operation.
+`x4-tuned`, `x4-legacy`) or save your own. All changes apply to the stream
+immediately, no restart needed. Pass `--headless` for console-only operation.
 
 ### In-game setup
 

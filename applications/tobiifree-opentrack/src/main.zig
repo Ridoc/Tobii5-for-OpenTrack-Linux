@@ -26,6 +26,7 @@ const log = std.log.scoped(.opentrack);
 
 const c = @cImport({
     @cInclude("gtk/gtk.h");
+    @cInclude("cairo.h");
 });
 
 const Options = struct {
@@ -76,6 +77,13 @@ var g_label_z: ?*c.GtkLabel = null;
 var g_label_yaw: ?*c.GtkLabel = null;
 var g_label_pitch: ?*c.GtkLabel = null;
 var g_label_roll: ?*c.GtkLabel = null;
+var g_draw: ?*c.GtkDrawingArea = null;
+
+// Gaze/head visualization state (stream thread writes, UI thread draws).
+const TRAIL_LEN: usize = 24;
+var g_gaze_norm: [2]f64 = .{ 0.5, 0.5 };
+var g_trail: [TRAIL_LEN][2]f64 = .{.{ 0.5, 0.5 }} ** TRAIL_LEN;
+var g_trail_head: usize = 0;
 
 var g_scale_yaw: ?*c.GtkScale = null;
 var g_entry_yaw: ?*c.GtkEntry = null;
@@ -272,7 +280,12 @@ fn onGaze(sample: *const core.GazeSample) void {
     g_last_ts = sample.timestamp_us;
 
     const out = g_pipeline.process(sample, &g_stream_preset, dt);
+    g_lock.lock();
     g_last_out = out;
+    g_gaze_norm = sample.gaze_point_2d_norm;
+    g_trail[g_trail_head] = sample.gaze_point_2d_norm;
+    g_trail_head = (g_trail_head + 1) % TRAIL_LEN;
+    g_lock.unlock();
     sendPacket(out);
 
     if (g_opts.verbose or g_opts.headless and g_frame_count <= 5) {
@@ -419,6 +432,116 @@ fn updateLabels() void {
     setText(g_label_yaw, &buf, "{d:7.2}°", .{yaw});
     setText(g_label_pitch, &buf, "{d:7.2}°", .{pitch});
     setText(g_label_roll, &buf, "{d:7.2}°", .{roll});
+
+    if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d));
+}
+
+fn cairoRoundedRect(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64, r: f64) void {
+    const rad = @min(r, @min(w, h) * 0.5);
+    c.cairo_move_to(cr, x + rad, y);
+    c.cairo_line_to(cr, x + w - rad, y);
+    c.cairo_arc(cr, x + w - rad, y + rad, rad, -std.math.pi * 0.5, 0);
+    c.cairo_line_to(cr, x + w, y + h - rad);
+    c.cairo_arc(cr, x + w - rad, y + h - rad, rad, 0, std.math.pi * 0.5);
+    c.cairo_line_to(cr, x + rad, y + h);
+    c.cairo_arc(cr, x + rad, y + h - rad, rad, std.math.pi * 0.5, std.math.pi);
+    c.cairo_line_to(cr, x, y + rad);
+    c.cairo_arc(cr, x + rad, y + rad, rad, std.math.pi, std.math.pi * 1.5);
+    c.cairo_close_path(cr);
+}
+
+fn drawViz(_: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c_int, _: ?*anyopaque) callconv(.c) void {
+    g_lock.lock();
+    const yaw = g_last_out[3];
+    const pitch = g_last_out[4];
+    const gx = g_gaze_norm[0];
+    const gy = g_gaze_norm[1];
+    var trail: [TRAIL_LEN][2]f64 = undefined;
+    const head_i = g_trail_head;
+    for (0..TRAIL_LEN) |i| trail[i] = g_trail[(head_i + i) % TRAIL_LEN];
+    g_lock.unlock();
+
+    const W = @as(f64, @floatFromInt(width));
+    const H = @as(f64, @floatFromInt(height));
+
+    c.cairo_set_source_rgb(cr, 0.09, 0.10, 0.12);
+    c.cairo_paint(cr);
+
+    // ── EYE: monitor + gaze point ────────────────────────────────────
+    const sx: f64 = 12;
+    const sy: f64 = 14;
+    const sw = W - 24;
+    const sh = (H - 44) * 0.58;
+
+    c.cairo_set_source_rgb(cr, 0.16, 0.18, 0.22);
+    cairoRoundedRect(cr, sx, sy, sw, sh, 6);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.32, 0.35, 0.40);
+    c.cairo_set_line_width(cr, 1);
+    cairoRoundedRect(cr, sx, sy, sw, sh, 6);
+    c.cairo_stroke(cr);
+
+    const cx = sx + sw * 0.5;
+    const cy = sy + sh * 0.5;
+    c.cairo_set_source_rgb(cr, 0.35, 0.38, 0.42);
+    c.cairo_move_to(cr, cx - 10, cy);
+    c.cairo_line_to(cr, cx + 10, cy);
+    c.cairo_stroke(cr);
+    c.cairo_move_to(cr, cx, cy - 10);
+    c.cairo_line_to(cr, cx, cy + 10);
+    c.cairo_stroke(cr);
+
+    for (0..TRAIL_LEN) |i| {
+        const alpha = 0.12 + 0.55 * (@as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(TRAIL_LEN - 1)));
+        c.cairo_set_source_rgba(cr, 0.4, 0.9, 0.55, alpha);
+        c.cairo_arc(cr, sx + trail[i][0] * sw, sy + trail[i][1] * sh, 2.0, 0, 2 * std.math.pi);
+        c.cairo_fill(cr);
+    }
+
+    const gpx = sx + gx * sw;
+    const gpy = sy + gy * sh;
+    c.cairo_set_source_rgb(cr, 0.98, 0.92, 0.25);
+    c.cairo_arc(cr, gpx, gpy, 5.0, 0, 2 * std.math.pi);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0, 0, 0);
+    c.cairo_arc(cr, gpx, gpy, 2.0, 0, 2 * std.math.pi);
+    c.cairo_fill(cr);
+
+    c.cairo_set_source_rgb(cr, 0.62, 0.67, 0.72);
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+    c.cairo_set_font_size(cr, 11);
+    c.cairo_move_to(cr, sx + 4, sy + 11);
+    c.cairo_show_text(cr, "EYE");
+
+    // ── HEAD: front view, nose shows yaw/pitch estimation ────────────
+    const hy = sy + sh + 10;
+    const hc_x = W * 0.5;
+    const hc_y = hy + (H - 26 - hy) * 0.5;
+    const hr: f64 = 26;
+
+    c.cairo_set_source_rgb(cr, 0.22, 0.25, 0.30);
+    c.cairo_arc(cr, hc_x, hc_y, hr, 0, 2 * std.math.pi);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.55, 0.6, 0.65);
+    c.cairo_set_line_width(cr, 1.5);
+    c.cairo_arc(cr, hc_x, hc_y, hr, 0, 2 * std.math.pi);
+    c.cairo_stroke(cr);
+
+    const disp_yaw = std.math.clamp(yaw, -45, 45);
+    const disp_pitch = std.math.clamp(pitch, -30, 30);
+    const nx = hc_x + disp_yaw * 1.1;
+    const ny = hc_y - disp_pitch * 1.1;
+    c.cairo_set_source_rgb(cr, 0.95, 0.5, 0.2);
+    c.cairo_set_line_width(cr, 2.5);
+    c.cairo_move_to(cr, hc_x, hc_y);
+    c.cairo_line_to(cr, nx, ny);
+    c.cairo_stroke(cr);
+    c.cairo_arc(cr, nx, ny, 3.5, 0, 2 * std.math.pi);
+    c.cairo_fill(cr);
+
+    c.cairo_set_source_rgb(cr, 0.62, 0.67, 0.72);
+    c.cairo_move_to(cr, hc_x - 20, hy + 12);
+    c.cairo_show_text(cr, "HEAD");
 }
 
 fn onTick(_: ?*anyopaque) callconv(.c) c_int {
@@ -606,7 +729,7 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     const window = c.gtk_application_window_new(@ptrCast(app));
     g_window = @ptrCast(window);
     c.gtk_window_set_title(@ptrCast(window), "Tobii → OpenTrack");
-    c.gtk_window_set_default_size(@ptrCast(window), 440, 940);
+    c.gtk_window_set_default_size(@ptrCast(window), 680, 920);
 
     // CSS: monospace values.
     const css = c.gtk_css_provider_new();
@@ -640,11 +763,18 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_box_append(@ptrCast(box), wptr(g_label_source));
     updateSourceLabel();
 
-    // Value grid.
+    // Input mappings (left) + live eye/head visualization (right), above the
+    // setting sliders.
+    const top_row = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 16);
+    c.gtk_box_append(@ptrCast(box), @ptrCast(top_row));
+
+    const val_col = c.gtk_box_new(c.GTK_ORIENTATION_VERTICAL, 4);
+    c.gtk_box_append(@ptrCast(top_row), @ptrCast(val_col));
+
     const grid = c.gtk_grid_new();
     c.gtk_grid_set_column_spacing(@ptrCast(grid), 16);
     c.gtk_grid_set_row_spacing(@ptrCast(grid), 2);
-    c.gtk_box_append(@ptrCast(box), @ptrCast(grid));
+    c.gtk_box_append(@ptrCast(val_col), @ptrCast(grid));
 
     addValueRow(grid, 0, "X (cm)", &g_label_x);
     addValueRow(grid, 1, "Y (cm)", &g_label_y);
@@ -652,6 +782,12 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     addValueRow(grid, 3, "Yaw", &g_label_yaw);
     addValueRow(grid, 4, "Pitch", &g_label_pitch);
     addValueRow(grid, 5, "Roll", &g_label_roll);
+
+    const da = c.gtk_drawing_area_new();
+    c.gtk_widget_set_size_request(da, 300, 220);
+    c.gtk_drawing_area_set_draw_func(@ptrCast(da), @ptrCast(&drawViz), null, null);
+    g_draw = @ptrCast(da);
+    c.gtk_box_append(@ptrCast(top_row), da);
 
     addSectionTitle(box, "Presets");
     addPresetRow(box);
