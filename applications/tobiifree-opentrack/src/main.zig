@@ -74,14 +74,20 @@ var g_label_yaw: ?*c.GtkLabel = null;
 var g_label_pitch: ?*c.GtkLabel = null;
 var g_label_roll: ?*c.GtkLabel = null;
 
-// Sensitivity controls (Yaw/Pitch gains).
+// Sensitivity controls (Yaw/Pitch gains + smoothing + deadzone).
 var g_srcbuf: [128]u8 = undefined;
 var g_scale_yaw: ?*c.GtkScale = null;
 var g_entry_yaw: ?*c.GtkEntry = null;
 var g_scale_pitch: ?*c.GtkScale = null;
 var g_entry_pitch: ?*c.GtkEntry = null;
+var g_scale_smoothing: ?*c.GtkScale = null;
+var g_entry_smoothing: ?*c.GtkEntry = null;
+var g_scale_deadzone: ?*c.GtkScale = null;
+var g_entry_deadzone: ?*c.GtkEntry = null;
 
-const SensAxis = enum { yaw, pitch };
+const SensAxis = enum { yaw, pitch, smoothing, deadzone };
+
+var g_tick: u32 = 0;
 
 /// C-pointer view of an opaque widget pointer (alignment-safe, like the overlay).
 fn wptr(x: anytype) [*c]c.GtkWidget {
@@ -200,11 +206,37 @@ fn updateSourceLabel() void {
     });
 }
 
+fn sensFormat(axis: SensAxis, v: f64, buf: []u8) ?[]const u8 {
+    const s = switch (axis) {
+        .yaw, .pitch => std.fmt.bufPrint(buf, "{d:.1}", .{v}),
+        .smoothing => std.fmt.bufPrint(buf, "{d:.2}", .{v}),
+        .deadzone => std.fmt.bufPrint(buf, "{d:.1}", .{v}),
+    } catch return null;
+    return s;
+}
+
+fn sensClamp(axis: SensAxis, v: f64) f64 {
+    return switch (axis) {
+        .yaw, .pitch => std.math.clamp(v, 0.0, 90.0),
+        .smoothing => std.math.clamp(v, 0.05, 0.6),
+        .deadzone => std.math.clamp(v, 0.0, 3.0),
+    };
+}
+
+fn sensScale(axis: SensAxis) *?*c.GtkScale {
+    return switch (axis) {
+        .yaw => &g_scale_yaw,
+        .pitch => &g_scale_pitch,
+        .smoothing => &g_scale_smoothing,
+        .deadzone => &g_scale_deadzone,
+    };
+}
+
 fn onScaleChanged(range: [*c]c.GtkRange, data: ?*anyopaque) callconv(.c) void {
     const axis: SensAxis = @enumFromInt(@intFromPtr(data orelse return));
     const v = c.gtk_range_get_value(range);
     var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d:.1}", .{v}) catch return;
+    const s = sensFormat(axis, v, &buf) orelse return;
     buf[s.len] = 0;
     switch (axis) {
         .yaw => {
@@ -215,6 +247,14 @@ fn onScaleChanged(range: [*c]c.GtkRange, data: ?*anyopaque) callconv(.c) void {
             g_opts.max_pitch = v;
             if (g_entry_pitch) |e| c.gtk_editable_set_text(@ptrCast(e), buf[0 .. s.len :0]);
         },
+        .smoothing => {
+            g_opts.smoothing = v;
+            if (g_entry_smoothing) |e| c.gtk_editable_set_text(@ptrCast(e), buf[0 .. s.len :0]);
+        },
+        .deadzone => {
+            g_opts.deadzone = v;
+            if (g_entry_deadzone) |e| c.gtk_editable_set_text(@ptrCast(e), buf[0 .. s.len :0]);
+        },
     }
     updateSourceLabel();
 }
@@ -224,17 +264,14 @@ fn onEntryActivated(entry: [*c]c.GtkEntry, data: ?*anyopaque) callconv(.c) void 
     const text = std.mem.span(c.gtk_editable_get_text(@ptrCast(entry)));
     if (text.len == 0) return;
     const v = std.fmt.parseFloat(f64, text) catch return;
-    const clamped = std.math.clamp(v, 0.0, 90.0);
+    const clamped = sensClamp(axis, v);
     switch (axis) {
-        .yaw => {
-            g_opts.max_yaw = clamped;
-            if (g_scale_yaw) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), clamped);
-        },
-        .pitch => {
-            g_opts.max_pitch = clamped;
-            if (g_scale_pitch) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), clamped);
-        },
+        .yaw => g_opts.max_yaw = clamped,
+        .pitch => g_opts.max_pitch = clamped,
+        .smoothing => g_opts.smoothing = clamped,
+        .deadzone => g_opts.deadzone = clamped,
     }
+    if (sensScale(axis).*) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), clamped);
     updateSourceLabel();
 }
 
@@ -245,14 +282,18 @@ fn addSensRow(
     scale_out: *?*c.GtkScale,
     entry_out: *?*c.GtkEntry,
     initial: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    digits: c_int,
     axis: SensAxis,
 ) void {
     const name_label = c.gtk_label_new(name);
     c.gtk_widget_set_halign(name_label, c.GTK_ALIGN_START);
     c.gtk_grid_attach(@ptrCast(grid), name_label, 0, row, 1, 1);
 
-    const scale = c.gtk_scale_new_with_range(c.GTK_ORIENTATION_HORIZONTAL, 0, 90, 0.5);
-    c.gtk_scale_set_digits(@ptrCast(scale), 1);
+    const scale = c.gtk_scale_new_with_range(c.GTK_ORIENTATION_HORIZONTAL, min, max, step);
+    c.gtk_scale_set_digits(@ptrCast(scale), digits);
     c.gtk_range_set_value(@ptrCast(scale), initial);
     c.gtk_widget_set_hexpand(scale, 1);
     c.gtk_grid_attach(@ptrCast(grid), scale, 1, row, 1, 1);
@@ -260,7 +301,7 @@ fn addSensRow(
 
     const entry = c.gtk_entry_new();
     var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d:.1}", .{initial}) catch return;
+    const s = sensFormat(axis, initial, &buf) orelse return;
     buf[s.len] = 0;
     c.gtk_editable_set_text(@ptrCast(entry), buf[0 .. s.len :0]);
     c.gtk_widget_set_size_request(@ptrCast(entry), 64, -1);
@@ -311,8 +352,9 @@ fn onTick(_: ?*anyopaque) callconv(.c) c_int {
         if (g_app) |app| c.g_application_quit(@ptrCast(app));
         return 0;
     }
-    g_socket.poll();
-    updateLabels();
+    g_socket.poll(); // 125 Hz stream poll — steady sample delivery to the game
+    g_tick +%= 1;
+    if (g_tick % 4 == 0) updateLabels(); // ~30 Hz label refresh
     return 1; // keep source
 }
 
@@ -384,8 +426,10 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_grid_set_row_spacing(@ptrCast(sens_grid), 4);
     c.gtk_box_append(@ptrCast(box), @ptrCast(sens_grid));
 
-    addSensRow(sens_grid, 0, "Yaw", &g_scale_yaw, &g_entry_yaw, g_opts.max_yaw, .yaw);
-    addSensRow(sens_grid, 1, "Pitch", &g_scale_pitch, &g_entry_pitch, g_opts.max_pitch, .pitch);
+    addSensRow(sens_grid, 0, "Yaw", &g_scale_yaw, &g_entry_yaw, g_opts.max_yaw, 0, 90, 0.5, 1, .yaw);
+    addSensRow(sens_grid, 1, "Pitch", &g_scale_pitch, &g_entry_pitch, g_opts.max_pitch, 0, 90, 0.5, 1, .pitch);
+    addSensRow(sens_grid, 2, "Smoothing", &g_scale_smoothing, &g_entry_smoothing, g_opts.smoothing, 0.05, 0.6, 0.05, 2, .smoothing);
+    addSensRow(sens_grid, 3, "Deadzone", &g_scale_deadzone, &g_entry_deadzone, g_opts.deadzone, 0, 3, 0.1, 1, .deadzone);
 
     c.gtk_widget_set_halign(hint, c.GTK_ALIGN_START);
     c.gtk_label_set_wrap(@ptrCast(hint), 1);
@@ -396,7 +440,7 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_window_set_child(@ptrCast(window), @ptrCast(box));
     c.gtk_window_present(@ptrCast(window));
 
-    _ = c.g_timeout_add(33, @ptrCast(&onTick), null); // ~30 Hz UI refresh
+    _ = c.g_timeout_add(8, @ptrCast(&onTick), null); // 125 Hz poll, ~30 Hz label refresh
 }
 
 // ─── CLI / lifecycle ─────────────────────────────────────────────────
@@ -516,8 +560,8 @@ pub fn main() void {
     };
 
     g_socket = SocketSource.init() catch |err| {
-        log.err("cannot connect to tobiifreed: {s}", .{@errorName(err)});
-        log.err("start tobiifreed first (it owns the USB device)", .{});
+        log.err("cannot connect to tobiifreedot: {s}", .{@errorName(err)});
+        log.err("start tobiifreedot first (it owns the USB device)", .{});
         std.process.exit(1);
     };
     defer g_socket.deinit();

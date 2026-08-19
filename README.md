@@ -72,9 +72,9 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 ```
 
 The bridge opens a small **GTK4 status window** showing the live pose values
-(X/Y/Z, Yaw/Pitch/Roll) with **sensitivity sliders** and manual text overrides
-for the yaw/pitch gains — both apply to the stream live, no restart needed.
-Pass `--headless` for console-only operation.
+(X/Y/Z, Yaw/Pitch/Roll) with **live tuning sliders** for yaw/pitch gains,
+smoothing, and deadzone (plus manual text overrides) — all apply to the stream
+immediately, no restart needed. Pass `--headless` for console-only operation.
 
 ### In-game setup
 
@@ -100,8 +100,8 @@ All tunables are CLI flags on the bridge (`tobiifree-opentrack --help`):
 | `--no-position` | — | rotation-only (zeros for head X/Y/Z) |
 | `--headless` | — | no GUI window, console logging only |
 
-In the GUI, the yaw/pitch gains (`--yaw-gain`/`--pitch-gain`) can also be tuned
-live with the sensitivity sliders or a typed value + Enter.
+In the GUI, the yaw/pitch gains (`--yaw-gain`/`--pitch-gain`), smoothing, and
+deadzone can all be tuned live with the sliders or a typed value + Enter.
 
 Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md).
 

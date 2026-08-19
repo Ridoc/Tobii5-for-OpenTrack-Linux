@@ -87,15 +87,20 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 
 By default the bridge opens a small GTK4 window showing the live pose values
 (X/Y/Z in cm, Yaw/Pitch/Roll in degrees) plus a status line ("Eyes: tracked" /
-"Eyes: lost") and two **sensitivity sliders**:
+"Eyes: lost") and live **tuning sliders**:
 
-- **Yaw / Pitch** sliders adjust `--yaw-gain` / `--pitch-gain` live (0–90°).
-- The **text entry** next to each slider is a manual override — type a value
-  and press Enter to set it precisely (clamped to 0–90°).
+- **Yaw / Pitch** — the `--yaw-gain` / `--pitch-gain` degrees at the screen
+  edge (0–90°).
+- **Smoothing** — the EMA alpha (`--smoothing`, 0.05–0.6): lower = smoother,
+  higher = more responsive. If the view is wobbly, lower this.
+- **Deadzone** — the yaw/pitch deadzone (`--deadzone`, 0–3°).
 
-Everything applies immediately to the outgoing stream, no restart needed. Pass
-`--headless` to run console-only (e.g. inside X4's built-in OpenTrack Support,
-or on a system without a display).
+The **text entry** next to each slider is a manual override — type a value and
+press Enter to set it precisely. Everything applies immediately to the outgoing
+stream, no restart needed. The socket is polled at 125 Hz so the game receives
+a steady stream (matching the `--headless` loop), while the labels refresh at
+~30 Hz. Pass `--headless` to run console-only (e.g. inside X4's built-in
+OpenTrack Support, or on a system without a display).
 
 ## In-game setup (X4: Foundations, native Linux)
 
@@ -124,8 +129,8 @@ are 1.0 by default, and OpenTrack's own filters aren't in the path), so the brid
 is the only place to tune. Defaults are tuned +50% over Tobii's 25°/15° for more
 rotation: yaw 37.5°, pitch 22.5°, smoothing 0.3, deadzone 0.2°. If the camera feels
 sluggish, raise smoothing; if it feels twitchy, lower it and raise the deadzone.
-In the GUI the Yaw/Pitch gains can also be adjusted live with the sensitivity
-sliders (or typed into the entry and confirmed with Enter).
+In the GUI the Yaw/Pitch gains, Smoothing, and Deadzone can all be adjusted
+live with the sliders (or typed into the entries and confirmed with Enter).
 
 ## Troubleshooting
 
