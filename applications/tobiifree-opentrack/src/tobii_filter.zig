@@ -389,12 +389,27 @@ pub const TobiiPipeline = struct {
     rest_time: f64 = 0,
     last_yaw: f64 = 0,
     last_pitch: f64 = 0,
+    // Anti-latch state: a pre-occlusion glitch frame can spike the
+    // interocular depth, and a subsequent n=1 frame would then latch that
+    // spike forever (the one-eye fallback never gets within the reject
+    // threshold). n1_timer/last_good* let us hold through short drops and
+    // gently unstick toward the real pose on long ones.
+    n1_timer: f64 = 0,
+    last_good_yaw: f64 = 0,
+    last_good_roll: f64 = 0,
+    has_last_good: bool = false,
+    pos_hold: [3]f64 = .{ 0, 0, 0 },
+    has_pos_hold: bool = false,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const rest_recenter_s: f64 = 1.2; // hold still near center → re-center
     const rest_yaw_deg: f64 = 30.0; // only recenter when roughly facing center
     const rest_pitch_deg: f64 = 20.0;
     const rest_vel_deg_s: f64 = 3.0;
+    const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
+    const glitch_deg: f64 = 10.0; // max genuine interocular yaw change per frame
+    const n1_hold_s: f64 = 0.5; // hold through n=1 (blinks/glances) this long
+    const unstick_rate: f64 = 2.0; // lerp rate toward the fallback once stuck
 
     /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
     /// and `last_out` so the view holds instead of zeroing during a re-settle.
@@ -411,25 +426,35 @@ pub const TobiiPipeline = struct {
     /// Re-acquisition re-centering is triggered by the caller via `reset()`
     /// (based on eye validity over time), not by dt.
     pub fn process(self: *TobiiPipeline, sample: *const core.GazeSample, p: *const Preset, dt: f64) [6]f64 {
-        // Eye-origin midpoint from VALID eyes only (a dropped eye otherwise
+        // Head-center estimate from VALID eyes only (a dropped eye otherwise
         // shifts the midpoint toward the remaining eye → camera yanks).
-        var mid: [3]f64 = .{ 0, 0, 0 };
+        // With one eye we compensate the missing half-IPD so the estimate stays
+        // on the true head center: n=2 uses the exact midpoint, n=1 uses the
+        // single eye offset toward center. This kills both the position
+        // offset and the seamless n=1/n=2 handoff for the rotation fallback.
+        var center: [3]f64 = .{ 0, 0, 0 };
         var n: usize = 0;
         if (sample.validity_L == 0) {
-            for (0..3) |i| mid[i] += sample.eye_origin_L_mm[i];
+            for (0..3) |i| center[i] += sample.eye_origin_L_mm[i];
             n += 1;
         }
         if (sample.validity_R == 0) {
-            for (0..3) |i| mid[i] += sample.eye_origin_R_mm[i];
+            for (0..3) |i| center[i] += sample.eye_origin_R_mm[i];
             n += 1;
         }
         const has_origins = n > 0;
         if (has_origins) {
-            for (0..3) |i| mid[i] /= @as(f64, @floatFromInt(n));
+            if (n == 2) {
+                for (0..3) |i| center[i] *= 0.5;
+            } else if (sample.validity_L == 0) {
+                center[0] += half_ipd_mm; // left eye sits -IPD/2 from center
+            } else {
+                center[0] -= half_ipd_mm; // right eye sits +IPD/2 from center
+            }
             if (!self.ref_set) {
                 // Settle window: average the origin before locking the ref so
                 // the tracker's acquisition wobble can't become a fixed offset.
-                for (0..3) |i| self.settle_sum[i] += mid[i];
+                for (0..3) |i| self.settle_sum[i] += center[i];
                 self.settle_frames += 1;
                 if (self.settle_frames >= settle_target) {
                     for (0..3) |i| {
@@ -456,27 +481,65 @@ pub const TobiiPipeline = struct {
         //    Yaw/roll come from the interocular line when both eyes are
         //    valid: turning the head makes one eye closer (depth difference),
         //    so atan2(ez, ex) is the genuine head-turn angle and atan2(ey, ex)
-        //    is the genuine head roll. The midpoint's Δz is never used for
+        //    is the genuine head roll. The center's Δz is never used for
         //    rotation, so leaning forward can't flip the angle to ±180°.
         //    One-eye fallback uses safe atan(Δx / neck); pitch uses the
-        //    midpoint's vertical offset vs the ref, again atan (no Δz).
+        //    center's vertical offset vs the ref, again atan (no Δz).
+        //
+        //    Anti-latch: a pre-occlusion frame can spike the interocular depth
+        //    (impossible ez → huge yaw), and the next frame drops to n=1. If we
+        //    just held the last pose, that spike would be latched forever (the
+        //    n=1 fallback never gets within the reject threshold). So we clamp
+        //    interocular yaw to last_good (reject the glitch frame), hold the
+        //    pose through short n=1 drops, and after n1_hold_s blend the held
+        //    angle toward the real IPD-compensated position so the camera
+        //    smoothly unsticks instead of freezing.
         var head_yaw: f64 = 0;
         var head_pitch: f64 = 0;
         var head_roll: f64 = 0;
         if (has_origins and self.ref_set) {
-            const dy = mid[1] - self.ref_mid[1];
+            const dy = center[1] - self.ref_mid[1];
             const neck_mm = p.neck * 10.0;
             if (sample.validity_L == 0 and sample.validity_R == 0) {
+                self.n1_timer = 0;
                 const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
                 const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 if (ex > 1.0) {
-                    head_yaw = std.math.atan2(ez, ex) * 180.0 / std.math.pi;
-                    head_roll = std.math.atan2(ey, ex) * 180.0 / std.math.pi;
+                    var inter_yaw = std.math.atan2(ez, ex) * 180.0 / std.math.pi;
+                    const inter_roll = std.math.atan2(ey, ex) * 180.0 / std.math.pi;
+                    if (!self.has_last_good) {
+                        self.last_good_yaw = inter_yaw;
+                        self.last_good_roll = inter_roll;
+                        self.has_last_good = true;
+                    } else if (@abs(inter_yaw - self.last_good_yaw) > glitch_deg) {
+                        // Pre-occlusion hardware spike (impossible depth):
+                        // drop the frame, hold the last known good pose.
+                        inter_yaw = self.last_good_yaw;
+                    } else {
+                        self.last_good_yaw = inter_yaw;
+                        self.last_good_roll = inter_roll;
+                    }
+                    head_yaw = self.last_good_yaw;
+                    head_roll = self.last_good_roll;
                 }
             } else {
-                const dx = mid[0] - self.ref_mid[0];
-                head_yaw = std.math.atan(dx / neck_mm) * 180.0 / std.math.pi;
+                // n=1: positional fallback with the escape hatch. Hold through
+                // short drops; if genuinely stuck with one eye, ease toward the
+                // real angle so the camera can't freeze mid-glance.
+                self.n1_timer += dt;
+                const dx = center[0] - self.ref_mid[0];
+                const fallback_yaw = std.math.atan(dx / neck_mm) * 180.0 / std.math.pi;
+                if (!self.has_last_good) {
+                    self.last_good_yaw = fallback_yaw;
+                    self.has_last_good = true;
+                }
+                if (self.n1_timer > n1_hold_s) {
+                    const t = @min(1.0, dt * unstick_rate);
+                    self.last_good_yaw += t * (fallback_yaw - self.last_good_yaw);
+                }
+                head_yaw = self.last_good_yaw;
+                head_roll = self.last_good_roll;
             }
             head_pitch = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
             if (p.flip_yaw) head_yaw = -head_yaw;
@@ -522,9 +585,9 @@ pub const TobiiPipeline = struct {
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} mid=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d}\n", .{
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d} n1t={d:.2} lg={d:.2}\n", .{
                 head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
-                mid[0], mid[1], mid[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], n,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], n, self.n1_timer, self.last_good_yaw,
             });
         }
 
@@ -545,13 +608,32 @@ pub const TobiiPipeline = struct {
         ), p.deadzone);
 
         // 5. translation (ref-relative mm → cm) with heavier smoothing.
+        //    Same anti-latch as rotation: the raw n=1 center differs by half-IPD
+        //    from the n=2 midpoint, so a long one-eye stretch would freeze the
+        //    position (reject threshold) or, worse, hold a wrong offset. The
+        //    IPD-compensated center makes the n=1 target correct, so after the
+        //    hold window we blend pos_hold toward it and unstick smoothly.
         var px: f64 = 0;
         var py: f64 = 0;
         var pz: f64 = 0;
         if (p.send_position and has_origins and self.ref_set) {
-            px = self.pos_x.update((mid[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
-            py = self.pos_y.update((mid[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
-            pz = self.pos_z.update((mid[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
+            var pos_target: [3]f64 = center;
+            if (n == 1) {
+                if (!self.has_pos_hold) {
+                    self.pos_hold = center;
+                    self.has_pos_hold = true;
+                }
+                if (self.n1_timer > n1_hold_s) {
+                    const t = @min(1.0, dt * unstick_rate);
+                    for (0..3) |i| self.pos_hold[i] += t * (center[i] - self.pos_hold[i]);
+                }
+                pos_target = self.pos_hold;
+            } else {
+                self.pos_hold = center;
+            }
+            px = self.pos_x.update((pos_target[0] - self.ref_mid[0]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
+            py = self.pos_y.update((pos_target[1] - self.ref_mid[1]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
+            pz = self.pos_z.update((pos_target[2] - self.ref_mid[2]) * 0.1 * p.pos_gain, dt, p.pos_smoothing, 1.0);
         }
 
         self.last_out = .{ px, py, pz, fy, fp, roll };
