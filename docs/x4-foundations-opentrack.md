@@ -191,8 +191,9 @@ caps so the spline can breathe, smoothing 0.93, pos smoothing 0.96),
 > limit (10°/frame, 1cm/frame) instead of following them, so a glitch can
 > never sweep the view; and the head reference is captured as the **average
 > over a ~1 s settle window** after acquisition — then **re-centered** after
-> a look-away gap, because each re-lock lands on slightly different absolute
-> origins (this was the source of the random -60° yaw jumps).
+> a sustained eye loss (re-acquisition), because each re-lock lands on
+> slightly different absolute origins (this was the source of the random
+> -60° yaw jumps).
 >
 > A constant offset (e.g. -105° yaw) means the reference was captured off to
 > one side. The pipeline **auto-recenters**: if you hold your head roughly
@@ -202,6 +203,12 @@ caps so the spline can breathe, smoothing 0.93, pos smoothing 0.96),
 > the view centers itself.
 
 ## Troubleshooting
+
+- **Inputs freeze then "reset to zero"** — older builds polled the daemon
+  socket from the GTK UI thread, so any UI/compositor stall stalled the game
+  feed and the dt gap tripped a re-center. The stream now runs on its own
+  thread; the GUI only reads a snapshot. Re-centering is triggered only by
+  real eye re-acquisition (sustained full eye loss), never by delivery stalls.
 
 - **"cannot connect to tobiifreedot"** — start the daemon first; it must own the
   USB device. `$XDG_RUNTIME_DIR` must be set (it is on normal desktop sessions).

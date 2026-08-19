@@ -48,10 +48,17 @@ var g_cur_preset_idx: usize = 0;
 var g_save_preset_name: ?[]const u8 = null;
 var g_last_ts: i64 = 0;
 
-var g_quit: bool = false;
+// Stream runs on its own thread so GTK stalls can't stall the game feed.
+// The UI mutates g_opts.p under g_lock; the stream thread snapshots it
+// into g_stream_preset each loop. g_last_out/g_eyes_valid/etc. are written
+// only by the stream thread and read by the UI under g_lock.
+var g_lock: std.Thread.Mutex = .{};
+var g_stream_preset: tobii.Preset = undefined;
+var g_quit: std.atomic.Value(bool) = .init(false);
 var g_frame_count: u64 = 0;
 var g_eyes_valid: bool = false;
 var g_got_sample: bool = false;
+var g_invalid_frames: u32 = 0;
 
 // Gaze source + last output pose (read by the GUI tick).
 var g_socket: SocketSource = undefined;
@@ -243,23 +250,28 @@ fn onGaze(sample: *const core.GazeSample) void {
     g_eyes_valid = valid;
     g_got_sample = true;
     if (!valid) {
+        g_invalid_frames +|= 1;
         if (g_opts.verbose or g_opts.headless and g_frame_count <= 5) {
             log.warn("no eyes detected, holding last pose", .{});
         }
         return;
     }
+    // Re-acquisition: after a sustained full eye loss the tracker re-locks on
+    // slightly different absolute origins, so re-center. Short losses
+    // (blinks) never trigger this. Delivery stalls keep eyes valid → no reset.
+    if (g_invalid_frames > 20) g_pipeline.reset();
+    g_invalid_frames = 0;
 
-    // Frame-independent dt from the device clock. Allow long gaps through so
-    // the pipeline can detect re-acquisition and re-center (it clamps dt
-    // internally for the smoothers).
+    // Frame-independent dt from the device clock, capped so a delivery gap
+    // can't cause a snap (re-centering is handled by eye validity above).
     var dt: f64 = 0.0111;
     if (g_last_ts != 0) {
         const d = @as(f64, @floatFromInt(sample.timestamp_us - g_last_ts)) / 1e6;
-        if (d > 0 and d < 5.0) dt = d;
+        if (d > 0) dt = @min(d, 0.25);
     }
     g_last_ts = sample.timestamp_us;
 
-    const out = g_pipeline.process(sample, &g_opts.p, dt);
+    const out = g_pipeline.process(sample, &g_stream_preset, dt);
     g_last_out = out;
     sendPacket(out);
 
@@ -304,7 +316,9 @@ fn updateSourceLabel() void {
 fn onScaleChanged(range: [*c]c.GtkRange, data: ?*anyopaque) callconv(.c) void {
     const axis: SensAxis = @enumFromInt(@intFromPtr(data orelse return));
     const v = c.gtk_range_get_value(range);
+    g_lock.lock();
     sensField(axis).* = v;
+    g_lock.unlock();
     var buf: [16]u8 = undefined;
     if (sensFormat(axis, v, &buf)) |s| {
         buf[s.len] = 0;
@@ -318,8 +332,11 @@ fn onEntryActivated(entry: [*c]c.GtkEntry, data: ?*anyopaque) callconv(.c) void 
     const text = std.mem.span(c.gtk_editable_get_text(@ptrCast(entry)));
     if (text.len == 0) return;
     const v = std.fmt.parseFloat(f64, text) catch return;
+    g_lock.lock();
     sensField(axis).* = sensClamp(axis, v);
-    if (sensScale(axis).*) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), sensField(axis).*);
+    const clamped = sensField(axis).*;
+    g_lock.unlock();
+    if (sensScale(axis).*) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), clamped);
     updateSourceLabel();
 }
 
@@ -379,32 +396,38 @@ fn addSectionTitle(box: [*c]c.GtkWidget, text: [*:0]const u8) void {
 fn updateLabels() void {
     var buf: [64]u8 = undefined;
 
-    var status: []const u8 = undefined;
-    if (!g_got_sample) {
-        status = "Waiting for gaze…";
-    } else if (g_eyes_valid) {
-        status = "Eyes: tracked";
-    } else {
-        status = "Eyes: lost — holding last pose";
-    }
+    g_lock.lock();
+    const status: []const u8 = if (!g_got_sample)
+        "Waiting for gaze…"
+    else if (g_eyes_valid)
+        "Eyes: tracked"
+    else
+        "Eyes: lost — holding last pose";
+    const x = g_last_out[0];
+    const y = g_last_out[1];
+    const z = g_last_out[2];
+    const yaw = g_last_out[3];
+    const pitch = g_last_out[4];
+    const roll = g_last_out[5];
+    g_lock.unlock();
+
     setText(g_label_status, &buf, "{s}", .{status});
 
-    setText(g_label_x, &buf, "{d:7.2}", .{g_last_out[0]});
-    setText(g_label_y, &buf, "{d:7.2}", .{g_last_out[1]});
-    setText(g_label_z, &buf, "{d:7.2}", .{g_last_out[2]});
-    setText(g_label_yaw, &buf, "{d:7.2}°", .{g_last_out[3]});
-    setText(g_label_pitch, &buf, "{d:7.2}°", .{g_last_out[4]});
-    setText(g_label_roll, &buf, "{d:7.2}°", .{g_last_out[5]});
+    setText(g_label_x, &buf, "{d:7.2}", .{x});
+    setText(g_label_y, &buf, "{d:7.2}", .{y});
+    setText(g_label_z, &buf, "{d:7.2}", .{z});
+    setText(g_label_yaw, &buf, "{d:7.2}°", .{yaw});
+    setText(g_label_pitch, &buf, "{d:7.2}°", .{pitch});
+    setText(g_label_roll, &buf, "{d:7.2}°", .{roll});
 }
 
 fn onTick(_: ?*anyopaque) callconv(.c) c_int {
-    if (g_quit) {
+    if (g_quit.load(.acquire)) {
         if (g_app) |app| c.g_application_quit(@ptrCast(app));
         return 0;
     }
-    g_socket.poll(); // 125 Hz stream poll — steady sample delivery to the game
     g_tick +%= 1;
-    if (g_tick % 4 == 0) updateLabels(); // ~30 Hz label refresh
+    if (g_tick % 4 == 0) updateLabels(); // ~30 Hz label refresh (UI thread)
     return 1; // keep source
 }
 
@@ -433,7 +456,9 @@ fn syncSliders() void {
 
 fn loadPreset(idx: usize) void {
     if (idx >= g_preset_list.items.len) return;
+    g_lock.lock();
     g_opts.p = g_preset_list.items[idx];
+    g_lock.unlock();
     g_cur_preset_idx = idx;
     syncSliders();
     const is_builtin = idx < tobii.BUILTIN_PRESETS.len;
@@ -471,7 +496,9 @@ fn onCurveChanged(obj: ?*c.GObject, _: ?*c.GParamSpec, _: ?*anyopaque) callconv(
     const dd: *c.GtkDropDown = @ptrCast(@alignCast(obj));
     const idx = c.gtk_drop_down_get_selected(dd);
     if (idx == g_opts.p.curve_mode) return;
+    g_lock.lock();
     g_opts.p.curve_mode = @intCast(idx);
+    g_lock.unlock();
     updateSourceLabel();
 }
 
@@ -480,7 +507,9 @@ fn onFlipToggled(btn: [*c]c.GtkToggleButton, data: ?*anyopaque) callconv(.c) voi
     const is_pitch = data != null;
     const cur = if (is_pitch) g_opts.p.flip_pitch else g_opts.p.flip_yaw;
     if (active == cur) return;
+    g_lock.lock();
     if (is_pitch) g_opts.p.flip_pitch = active else g_opts.p.flip_yaw = active;
+    g_lock.unlock();
 }
 
 fn onSaveClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
@@ -502,7 +531,9 @@ fn onSaveAsResponse(dialog: [*c]c.GtkDialog, resp: c_int, _: ?*anyopaque) callco
     }
     const alloc = g_presets_arena.allocator();
     const nm = alloc.dupe(u8, name) catch return;
+    g_lock.lock();
     var copy = g_opts.p;
+    g_lock.unlock();
     copy.name = nm;
     g_preset_list.append(copy) catch return;
     g_cur_preset_idx = g_preset_list.items.len - 1;
@@ -879,7 +910,20 @@ fn parseArgs() void {
 }
 
 fn handleSignal(_: c_int) callconv(.c) void {
-    g_quit = true;
+    g_quit.store(true, .release);
+}
+
+/// Dedicated stream thread: snapshot the preset under the lock, then poll
+/// the daemon socket (non-blocking) which drives onGaze → pipeline → UDP.
+/// The GUI never touches the socket, so UI stalls can't stall the game feed.
+fn streamThread() void {
+    while (!g_quit.load(.acquire)) {
+        g_lock.lock();
+        g_stream_preset = g_opts.p;
+        g_lock.unlock();
+        g_socket.poll();
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
 }
 
 fn installSignalHandlers() void {
@@ -953,9 +997,14 @@ pub fn main() void {
         g_opts.p.smoothing, g_opts.p.deadzone,
     });
 
+    g_stream_preset = g_opts.p;
+    const stream_thread = std.Thread.spawn(.{}, streamThread, .{}) catch |e| {
+        log.err("cannot start stream thread: {s}", .{@errorName(e)});
+        std.process.exit(1);
+    };
+
     if (g_opts.headless) {
-        while (!g_quit) {
-            g_socket.poll();
+        while (!g_quit.load(.acquire)) {
             std.Thread.sleep(std.time.ns_per_ms);
         }
     } else {
@@ -965,5 +1014,7 @@ pub fn main() void {
         _ = c.g_application_run(@ptrCast(app), 0, null);
         c.g_object_unref(@ptrCast(app));
     }
+    g_quit.store(true, .release);
+    stream_thread.join();
     log.info("bye", .{});
 }

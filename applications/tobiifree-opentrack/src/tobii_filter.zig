@@ -407,13 +407,9 @@ pub const TobiiPipeline = struct {
 
     /// Process one gaze sample into a 6-DOF pose
     /// (X, Y, Z in cm; Yaw, Pitch, Roll in degrees).
+    /// Re-acquisition re-centering is triggered by the caller via `reset()`
+    /// (based on eye validity over time), not by dt.
     pub fn process(self: *TobiiPipeline, sample: *const core.GazeSample, p: *const Preset, dt: f64) [6]f64 {
-        // A long gap means the tracker lost the eyes and re-locked. Its
-        // absolute eye-origin estimate lands slightly differently each
-        // re-acquisition, so the old ref would produce a bogus 20-60° jump.
-        // Re-center on the new origin (freeze the view while it settles).
-        if (self.ref_set and dt > 0.5) self.reset();
-
         // Eye-origin midpoint from VALID eyes only (a dropped eye otherwise
         // shifts the midpoint toward the remaining eye → camera yanks).
         var mid: [3]f64 = .{ 0, 0, 0 };
