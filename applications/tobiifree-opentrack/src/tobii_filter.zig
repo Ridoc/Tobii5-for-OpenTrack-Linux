@@ -491,6 +491,10 @@ pub const TobiiPipeline = struct {
     settle_yaw_sum: f64 = 0,
     settle_roll_sum: f64 = 0,
     settle_yaw_frames: u32 = 0,
+    // Crossfade between interocular yaw (both eyes, accurate) and the
+    // position-based fallback (one eye, continuous). 0 = interocular,
+    // 1 = head-center lateral angle. Ramped so occlusion transitions don't pop.
+    fb_blend: f64 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const rest_recenter_s: f64 = 1.2; // hold still near center → re-center
@@ -504,6 +508,7 @@ pub const TobiiPipeline = struct {
     const glitch_deg: f64 = 10.0; // max genuine interocular yaw change per frame
     const n1_hold_s: f64 = 0.5; // hold through n=1 (blinks/glances) this long
     const unstick_rate: f64 = 2.0; // lerp rate toward the fallback once stuck
+    const crossfade_s: f64 = 0.2; // ramp occlusion yaw fallback in/out
 
     /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
     /// and `last_out` so the view holds instead of zeroing during a re-settle.
@@ -638,11 +643,20 @@ pub const TobiiPipeline = struct {
         if (has_origins and self.ref_set) {
             const dy = center[1] - self.ref_mid[1];
             const neck_mm = p.neck * 10.0;
+            const pitch_est = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
+            // Position-based yaw fallback: the head center's lateral angle vs
+            // the ref, atan2(dx, z) ≈ the true turn angle. Works with ONE eye
+            // (the center is IPD-compensated), so a turn never freezes at the
+            // point one eye leaves the trackbox. Crossfaded against the
+            // interocular measurement so transitions don't pop.
+            const pos_yaw = std.math.atan2(
+                center[0] - self.ref_mid[0],
+                @max(center[2], 50.0),
+            ) * 180.0 / std.math.pi;
             if (rot_both) {
                 self.n1_timer = 0;
                 var rel_yaw = inter_yaw - self.yaw_ref;
                 const rel_roll = inter_roll - self.roll_ref;
-                const pitch_est = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
                 if (!self.has_last_good) {
                     self.last_good_yaw = rel_yaw;
                     self.last_good_roll = rel_roll;
@@ -657,21 +671,27 @@ pub const TobiiPipeline = struct {
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                 }
-                head_yaw = self.last_good_yaw;
+                // Both eyes again: ease off the position fallback.
+                self.fb_blend = @max(0.0, self.fb_blend - dt / crossfade_s);
+                head_yaw = self.last_good_yaw * (1.0 - self.fb_blend) + pos_yaw * self.fb_blend;
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
             } else {
-                // Degraded (one eye, or a glitched pair): hold the rigid pose.
+                // One eye (or a glitched pair): yaw falls back to the head
+                // center's lateral angle (continuous, no freeze); roll can't be
+                // measured with one eye → holds; pitch stays live from center.
                 self.n1_timer += dt;
                 if (!self.has_last_good) {
-                    self.last_good_yaw = 0;
+                    self.last_good_yaw = pos_yaw;
                     self.last_good_roll = 0;
-                    self.last_good_pitch = 0;
+                    self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
                 }
-                head_yaw = self.last_good_yaw;
+                self.fb_blend = @min(1.0, self.fb_blend + dt / crossfade_s);
+                head_yaw = self.last_good_yaw * (1.0 - self.fb_blend) + pos_yaw * self.fb_blend;
+                self.last_good_yaw = head_yaw; // keep the clamp baseline current
                 head_roll = self.last_good_roll;
-                head_pitch = self.last_good_pitch;
+                head_pitch = pitch_est;
             }
             if (p.flip_yaw) head_yaw = -head_yaw;
             if (p.flip_pitch) head_pitch = -head_pitch;
@@ -718,9 +738,9 @@ pub const TobiiPipeline = struct {
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
                 head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, n, self.n1_timer, self.last_good_yaw,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, self.fb_blend, n, self.n1_timer, self.last_good_yaw,
                 self.rot_yaw.cutoff(), smoothModeName(mode),
             });
         }
