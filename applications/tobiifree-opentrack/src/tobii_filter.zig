@@ -762,18 +762,28 @@ ref_set: bool = false,
 //    a short spike OPPOSITE to the turn. At rest (or slow aiming), gaze blends
 //    fully as the fine-aim "tug". Gate eases 8 → 25 °/s, 1 → 0.
         const mode: SmoothMode = @enumFromInt(@min(p.smooth_mode, @intFromEnum(SmoothMode.none)));
-        const head_speed = if (self.has_last_head_yaw and dt > 0)
-            @abs(head_yaw - self.last_head_yaw) / dt
+        const head_dv = if (self.has_last_head_yaw and dt > 0)
+            head_yaw - self.last_head_yaw
         else
             0.0;
+        const head_speed = @abs(head_dv) / @max(dt, 1e-6);
         self.last_head_yaw = head_yaw;
         self.has_last_head_yaw = true;
-        const gate = if (head_speed <= 8.0)
+        // Gaze is the fine-aim "tug" — but only when it AGREES with the head's
+        // turn direction. The VOR reflex counter-rotates the eyes during a head
+        // turn, so an opposing gaze is exactly the artifact that fired the
+        // "counter-move right when turning left fast" spike (and worse on one
+        // side where the eye-loss fallback + gate timing align). Direction-aware:
+        //   gate = 0 if head moving AND gaze opposes head velocity (drop VOR)
+        //           else speed-based 8..25 deg/s taper (aiming while still)
+        const dir_gate: f64 = if (head_speed > 5.0 and (head_dv * gaze_yaw) < 0.0) 0.0 else 1.0;
+        const speed_gate = if (head_speed <= 8.0)
             1.0
         else if (head_speed >= 25.0)
             0.0
         else
             1.0 - (head_speed - 8.0) / 17.0;
+        const gate = dir_gate * speed_gate;
         const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio * gate;
         const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio * gate) * p.pitch_gain;
         const yaw = self.rot_yaw.update(raw_yaw, dt, mode, p.smoothing, 10.0);
