@@ -163,12 +163,20 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
    (`yaw = atan2(Δz, Δx)` of the two eyes; `roll = atan2(Δy, Δx)`), which is the
    genuine head-turn angle and never uses the midpoint's depth, so leaning
    forward can't flip the angle to ±180° (the old `atan2(Δx, neck−Δz)` flip
-   trap). One-eye fallback: `yaw = atan(Δx/neck)`. Pitch: `atan(Δy/neck)`.
-   All ×`head_gain` (+`pitch_gain`).
-3. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
-4. **Smoothing** — velocity-adaptive retention (0.90 at rest → 0.05 at 180°/s),
-   time-corrected per frame; translation uses the heavier `pos_smoothing`.
-5. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
+   trap). Pitch: `atan(Δy/neck)` (biomechanical — two eyes can't encode
+   nodding). All ×`head_gain` (+`pitch_gain`).
+3. **Validation gate** — a zero-vector eye (dropped eye defaulted to (0,0,0))
+   is rejected, and the interocular distance must be within biological bounds
+   (45–80 mm) with the right eye truly on the right, or the frame is a
+   glitch/eye-swap. **Rotation then freezes** to the last good pose (one eye
+   can't measure yaw/roll without translation crosstalk), while translation
+   keeps tracking so you can still lean.
+4. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
+5. **Smoothing** — selectable mode: **One Euro** (default; adaptive cutoff
+   `fc = fc_min + β·|speed|` kills Z-depth jitter at rest with no lag on fast
+   turns), **Accela** (legacy velocity-adaptive retention), or **None**
+   (raw, for debugging). Translation always uses the heavier `pos_smoothing`.
+6. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
    pitch) or `power`/`linear`, capped by the yaw/pitch gains, then the deadzone.
 
 **Built-in presets**: `tobii-official` (OEM curve + 180/90 caps),

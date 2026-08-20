@@ -84,6 +84,10 @@ const TRAIL_LEN: usize = 24;
 var g_gaze_norm: [2]f64 = .{ 0.5, 0.5 };
 var g_trail: [TRAIL_LEN][2]f64 = .{.{ 0.5, 0.5 }} ** TRAIL_LEN;
 var g_trail_head: usize = 0;
+var g_eye_l_norm: [2]f64 = .{ 0.5, 0.5 };
+var g_eye_r_norm: [2]f64 = .{ 0.5, 0.5 };
+var g_eye_l_valid: bool = false;
+var g_eye_r_valid: bool = false;
 
 var g_scale_yaw: ?*c.GtkScale = null;
 var g_entry_yaw: ?*c.GtkEntry = null;
@@ -116,6 +120,8 @@ var g_dropdown_preset: ?*c.GtkDropDown = null;
 var g_strings_preset: ?*c.GtkStringList = null;
 var g_dropdown_curve: ?*c.GtkDropDown = null;
 var g_strings_curve: ?*c.GtkStringList = null;
+var g_dropdown_smooth: ?*c.GtkDropDown = null;
+var g_strings_smooth: ?*c.GtkStringList = null;
 var g_check_flip_yaw: ?*c.GtkCheckButton = null;
 var g_check_flip_pitch: ?*c.GtkCheckButton = null;
 var g_btn_save: ?*c.GtkButton = null;
@@ -235,6 +241,77 @@ fn sensClamp(axis: SensAxis, v: f64) f64 {
     return std.math.clamp(v, d.min, d.max);
 }
 
+/// Short purpose hint shown under each slider (3-5 words).
+fn axisPurpose(axis: SensAxis) [:0]const u8 {
+    return switch (axis) {
+        .yaw => "max output turn angle",
+        .pitch => "max output tilt angle",
+        .deadzone => "ignore small center jitter",
+        .smoothing => "rotation smoothing strength",
+        .pos_smoothing => "translation smoothing strength",
+        .head_gain => "scales head turn input",
+        .pitch_gain => "boosts up/down response",
+        .eye_ratio => "gaze lead vs head",
+        .pos_gain => "amplifies lean translation",
+        .neck => "pivot distance, pitch scale",
+        .gaze_scale => "gaze edge-turn degrees",
+        .gaze_scale_pitch => "gaze edge-tilt degrees",
+        .curve_exp => "power-curve curvature",
+    };
+}
+
+/// Threshold values rendered as tick marks under the slider.
+fn axisMarks(axis: SensAxis) []const f64 {
+    return switch (axis) {
+        .yaw => &.{ 35, 60, 90, 180 },
+        .pitch => &.{ 20, 30, 90 },
+        .deadzone => &.{ 0.1, 0.2 },
+        .smoothing => &.{ 0.90, 0.93, 0.98 },
+        .pos_smoothing => &.{ 0.90, 0.96, 0.99 },
+        .head_gain => &.{ 1, 2, 5 },
+        .pitch_gain => &.{ 1, 1.5, 2, 3 },
+        .eye_ratio => &.{ 0.25, 0.5, 1 },
+        .pos_gain => &.{ 1, 2, 5 },
+        .neck => &.{ 12, 13, 20 },
+        .gaze_scale => &.{ 35, 40, 90 },
+        .gaze_scale_pitch => &.{ 25, 30, 60 },
+        .curve_exp => &.{ 1 },
+    };
+}
+
+/// Values that the slider "magnetically" grabs when released near them.
+fn axisSnaps(axis: SensAxis) []const f64 {
+    return switch (axis) {
+        .yaw => &.{ 35, 60, 90, 180 },
+        .pitch => &.{ 20, 30, 90 },
+        .deadzone => &.{ 0.1, 0.2 },
+        .smoothing => &.{ 0.90, 0.93 },
+        .pos_smoothing => &.{ 0.90, 0.96 },
+        .head_gain => &.{ 1, 2 },
+        .pitch_gain => &.{ 1, 1.5, 2 },
+        .eye_ratio => &.{ 0.25, 0.5, 1 },
+        .pos_gain => &.{ 1, 2 },
+        .neck => &.{ 12, 13 },
+        .gaze_scale => &.{ 35, 40 },
+        .gaze_scale_pitch => &.{ 25, 30 },
+        .curve_exp => &.{ 1 },
+    };
+}
+
+/// Snap `v` to the nearest axisSnap value within `def.step * 1.5`; else v.
+fn magneticSnap(axis: SensAxis, v: f64) f64 {
+    const d = axisDef(axis);
+    const radius = d.step * 1.5;
+    var best: ?f64 = null;
+    for (axisSnaps(axis)) |s| {
+        if (@abs(v - s) <= radius) {
+            if (best == null or @abs(v - s) < @abs(v - best.?)) best = s;
+        }
+    }
+    if (best) |s| return s;
+    return v;
+}
+
 /// C-pointer view of an opaque widget pointer (alignment-safe).
 fn wptr(x: anytype) [*c]c.GtkWidget {
     return @ptrCast(@alignCast(x));
@@ -283,6 +360,10 @@ fn onGaze(sample: *const core.GazeSample) void {
     g_lock.lock();
     g_last_out = out;
     g_gaze_norm = sample.gaze_point_2d_norm;
+    g_eye_l_norm = sample.gaze_point_2d_L_norm;
+    g_eye_r_norm = sample.gaze_point_2d_R_norm;
+    g_eye_l_valid = sample.validity_L == 0;
+    g_eye_r_valid = sample.validity_R == 0;
     g_trail[g_trail_head] = sample.gaze_point_2d_norm;
     g_trail_head = (g_trail_head + 1) % TRAIL_LEN;
     g_lock.unlock();
@@ -328,7 +409,14 @@ fn updateSourceLabel() void {
 
 fn onScaleChanged(range: [*c]c.GtkRange, data: ?*anyopaque) callconv(.c) void {
     const axis: SensAxis = @enumFromInt(@intFromPtr(data orelse return));
-    const v = c.gtk_range_get_value(range);
+    var v = c.gtk_range_get_value(range);
+    // Magnetic catch: with a small capture radius (step·1.5), the value only
+    // sticks when the thumb is already right on a marked threshold (e.g. 1.0).
+    const snapped = magneticSnap(axis, v);
+    if (snapped != v) {
+        c.gtk_range_set_value(range, snapped);
+        v = snapped;
+    }
     g_lock.lock();
     sensField(axis).* = v;
     g_lock.unlock();
@@ -346,7 +434,7 @@ fn onEntryActivated(entry: [*c]c.GtkEntry, data: ?*anyopaque) callconv(.c) void 
     if (text.len == 0) return;
     const v = std.fmt.parseFloat(f64, text) catch return;
     g_lock.lock();
-    sensField(axis).* = sensClamp(axis, v);
+    sensField(axis).* = magneticSnap(axis, sensClamp(axis, v));
     const clamped = sensField(axis).*;
     g_lock.unlock();
     if (sensScale(axis).*) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), clamped);
@@ -364,12 +452,20 @@ fn addSensRow(
     c.gtk_widget_set_halign(name_label, c.GTK_ALIGN_START);
     c.gtk_grid_attach(@ptrCast(grid), name_label, 0, row, 1, 1);
 
+    const purpose = c.gtk_label_new(axisPurpose(axis));
+    c.gtk_widget_set_halign(purpose, c.GTK_ALIGN_START);
+    c.gtk_style_context_add_class(c.gtk_widget_get_style_context(purpose), "dim");
+    c.gtk_grid_attach(@ptrCast(grid), purpose, 1, row, 1, 1);
+
     const scale = c.gtk_scale_new_with_range(c.GTK_ORIENTATION_HORIZONTAL, def.min, def.max, def.step);
     c.gtk_scale_set_digits(@ptrCast(scale), def.digits);
     c.gtk_range_set_value(@ptrCast(scale), sensField(axis).*);
     c.gtk_widget_set_hexpand(scale, 1);
-    c.gtk_grid_attach(@ptrCast(grid), scale, 1, row, 1, 1);
+    c.gtk_grid_attach(@ptrCast(grid), scale, 2, row, 1, 1);
     sensScale(axis).* = @ptrCast(scale);
+    for (axisMarks(axis)) |m| {
+        c.gtk_scale_add_mark(@ptrCast(scale), m, c.GTK_POS_BOTTOM, null);
+    }
 
     const entry = c.gtk_entry_new();
     var buf: [16]u8 = undefined;
@@ -378,7 +474,7 @@ fn addSensRow(
         c.gtk_editable_set_text(@ptrCast(entry), buf[0 .. s.len :0]);
     }
     c.gtk_widget_set_size_request(@ptrCast(entry), 64, -1);
-    c.gtk_grid_attach(@ptrCast(grid), entry, 2, row, 1, 1);
+    c.gtk_grid_attach(@ptrCast(grid), entry, 3, row, 1, 1);
     sensEntry(axis).* = @ptrCast(entry);
 
     _ = c.g_signal_connect_data(
@@ -432,8 +528,6 @@ fn updateLabels() void {
     setText(g_label_yaw, &buf, "{d:7.2}°", .{yaw});
     setText(g_label_pitch, &buf, "{d:7.2}°", .{pitch});
     setText(g_label_roll, &buf, "{d:7.2}°", .{roll});
-
-    if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d));
 }
 
 fn cairoRoundedRect(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64, r: f64) void {
@@ -454,8 +548,12 @@ fn drawViz(_: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c_int,
     g_lock.lock();
     const yaw = g_last_out[3];
     const pitch = g_last_out[4];
-    const gx = g_gaze_norm[0];
-    const gy = g_gaze_norm[1];
+    const elx = g_eye_l_norm[0];
+    const ely = g_eye_l_norm[1];
+    const elv = g_eye_l_valid;
+    const erx = g_eye_r_norm[0];
+    const ery = g_eye_r_norm[1];
+    const erv = g_eye_r_valid;
     var trail: [TRAIL_LEN][2]f64 = undefined;
     const head_i = g_trail_head;
     for (0..TRAIL_LEN) |i| trail[i] = g_trail[(head_i + i) % TRAIL_LEN];
@@ -498,14 +596,27 @@ fn drawViz(_: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c_int,
         c.cairo_fill(cr);
     }
 
-    const gpx = sx + gx * sw;
-    const gpy = sy + gy * sh;
-    c.cairo_set_source_rgb(cr, 0.98, 0.92, 0.25);
-    c.cairo_arc(cr, gpx, gpy, 5.0, 0, 2 * std.math.pi);
-    c.cairo_fill(cr);
-    c.cairo_set_source_rgb(cr, 0, 0, 0);
-    c.cairo_arc(cr, gpx, gpy, 2.0, 0, 2 * std.math.pi);
-    c.cairo_fill(cr);
+    // Per-eye dots (left/right), color-coded by validity: yellow = tracked,
+    // red = lost. The pupil shifts independently, so two dots make eye-swap
+    // or loss visible at a glance.
+    const drawEye = struct {
+        fn f(cr2: *c.cairo_t, x: f64, y: f64, valid: bool, ox: f64, oy: f64, ow: f64, oh: f64) void {
+            const px = ox + x * ow;
+            const py = oy + y * oh;
+            if (valid) {
+                c.cairo_set_source_rgb(cr2, 0.98, 0.92, 0.25);
+            } else {
+                c.cairo_set_source_rgb(cr2, 0.85, 0.25, 0.25);
+            }
+            c.cairo_arc(cr2, px, py, 4.5, 0, 2 * std.math.pi);
+            c.cairo_fill(cr2);
+            c.cairo_set_source_rgb(cr2, 0, 0, 0);
+            c.cairo_arc(cr2, px, py, 1.8, 0, 2 * std.math.pi);
+            c.cairo_fill(cr2);
+        }
+    }.f;
+    drawEye(cr, elx, ely, elv, sx, sy, sw, sh);
+    drawEye(cr, erx, ery, erv, sx, sy, sw, sh);
 
     c.cairo_set_source_rgb(cr, 0.62, 0.67, 0.72);
     c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
@@ -550,7 +661,10 @@ fn onTick(_: ?*anyopaque) callconv(.c) c_int {
         return 0;
     }
     g_tick +%= 1;
-    if (g_tick % 4 == 0) updateLabels(); // ~30 Hz label refresh (UI thread)
+    if (g_tick % 125 == 0) updateLabels(); // numbers at 1 Hz (UI thread)
+    if (g_tick % 62 == 0) {
+        if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d)); // viz at 2 Hz
+    }
     return 1; // keep source
 }
 
@@ -572,6 +686,7 @@ fn syncSliders() void {
         if (sensScale(axis).*) |sc| c.gtk_range_set_value(@ptrCast(@alignCast(sc)), sensField(axis).*);
     }
     if (g_dropdown_curve) |dd| c.gtk_drop_down_set_selected(@ptrCast(dd), g_opts.p.curve_mode);
+    if (g_dropdown_smooth) |dd| c.gtk_drop_down_set_selected(@ptrCast(dd), g_opts.p.smooth_mode);
     if (g_check_flip_yaw) |cb| c.gtk_check_button_set_active(@ptrCast(cb), @intFromBool(g_opts.p.flip_yaw));
     if (g_check_flip_pitch) |cb| c.gtk_check_button_set_active(@ptrCast(cb), @intFromBool(g_opts.p.flip_pitch));
     updateSourceLabel();
@@ -621,6 +736,16 @@ fn onCurveChanged(obj: ?*c.GObject, _: ?*c.GParamSpec, _: ?*anyopaque) callconv(
     if (idx == g_opts.p.curve_mode) return;
     g_lock.lock();
     g_opts.p.curve_mode = @intCast(idx);
+    g_lock.unlock();
+    updateSourceLabel();
+}
+
+fn onSmoothChanged(obj: ?*c.GObject, _: ?*c.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const dd: *c.GtkDropDown = @ptrCast(@alignCast(obj));
+    const idx = c.gtk_drop_down_get_selected(dd);
+    if (idx == g_opts.p.smooth_mode) return;
+    g_lock.lock();
+    g_opts.p.smooth_mode = @intCast(@min(idx, @intFromEnum(tobii.SmoothMode.none)));
     g_lock.unlock();
     updateSourceLabel();
 }
@@ -737,7 +862,8 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
         css,
         ".value { font-family: monospace; font-size: 17px; }" ++
             ".status { font-weight: bold; }" ++
-            ".hint { font-size: 11px; opacity: 0.75; }",
+            ".hint { font-size: 11px; opacity: 0.75; }" ++
+            ".dim { font-size: 11px; opacity: 0.55; }",
     );
     c.gtk_style_context_add_provider_for_display(
         c.gdk_display_get_default(),
@@ -836,6 +962,24 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_drop_down_set_selected(@ptrCast(curve_dd), g_opts.p.curve_mode);
     _ = c.g_signal_connect_data(@ptrCast(curve_dd), "notify::selected", @ptrCast(&onCurveChanged), null, null, 0);
     c.gtk_box_append(@ptrCast(box), @ptrCast(mode_row));
+
+    // Smoothing-mode dropdown.
+    const smooth_row = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 6);
+    const smooth_lbl = c.gtk_label_new("Smoothing:");
+    c.gtk_box_append(@ptrCast(smooth_row), @ptrCast(smooth_lbl));
+    const smooth_dd = c.gtk_drop_down_new(null, null);
+    c.gtk_widget_set_hexpand(smooth_dd, 1);
+    c.gtk_box_append(@ptrCast(smooth_row), smooth_dd);
+    g_dropdown_smooth = @ptrCast(smooth_dd);
+    const smooth_sl = c.gtk_string_list_new(null);
+    c.gtk_string_list_append(smooth_sl, "One Euro");
+    c.gtk_string_list_append(smooth_sl, "Accela");
+    c.gtk_string_list_append(smooth_sl, "None");
+    g_strings_smooth = smooth_sl;
+    c.gtk_drop_down_set_model(@ptrCast(smooth_dd), @ptrCast(smooth_sl));
+    c.gtk_drop_down_set_selected(@ptrCast(smooth_dd), g_opts.p.smooth_mode);
+    _ = c.g_signal_connect_data(@ptrCast(smooth_dd), "notify::selected", @ptrCast(&onSmoothChanged), null, null, 0);
+    c.gtk_box_append(@ptrCast(box), @ptrCast(smooth_row));
 
     const flip_row = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 10);
     const flip_yaw = c.gtk_check_button_new_with_label("Flip yaw");
