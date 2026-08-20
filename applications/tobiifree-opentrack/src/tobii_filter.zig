@@ -71,6 +71,64 @@ pub const Preset = struct {
 
 pub const BUILTIN_PRESETS = [_]Preset{
     .{
+        .name = "tobii-official (old)",
+        // Snapshot of the previous tobii-official before the corner-hold /
+        // pitch-symmetry rework. Kept so the old feel is one click away.
+        .max_yaw = 180.0,
+        .max_pitch = 90.0,
+        .gaze_scale = 40.0,
+        .gaze_scale_pitch = 30.0,
+        .smoothing = 0.90,
+        .pos_smoothing = 0.95,
+        .deadzone = 0.15,
+        .head_gain = 2.0,
+        .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
+        .pos_gain = 2.0,
+        .neck = 13.0,
+        .curve_mode = 2,
+        .curve_exp = 0.5,
+        .flip_yaw = true,
+    },
+    .{
+        .name = "x4 (old)",
+        // Snapshot of the previous x4 before the rework.
+        .max_yaw = 120.0,
+        .max_pitch = 90.0,
+        .gaze_scale = 40.0,
+        .gaze_scale_pitch = 30.0,
+        .smoothing = 0.90,
+        .pos_smoothing = 0.95,
+        .deadzone = 0.15,
+        .head_gain = 2.0,
+        .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
+        .pos_gain = 2.0,
+        .neck = 13.0,
+        .curve_mode = 2,
+        .curve_exp = 0.5,
+        .flip_yaw = true,
+    },
+    .{
+        .name = "x4-smooth (old)",
+        // Snapshot of the previous x4-smooth (head 2.4x) before the rework.
+        .max_yaw = 120.0,
+        .max_pitch = 90.0,
+        .gaze_scale = 40.0,
+        .gaze_scale_pitch = 30.0,
+        .smoothing = 0.90,
+        .pos_smoothing = 0.95,
+        .deadzone = 0.15,
+        .head_gain = 2.4,
+        .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
+        .pos_gain = 2.0,
+        .neck = 13.0,
+        .curve_mode = 2,
+        .curve_exp = 0.5,
+        .flip_yaw = true,
+    },
+    .{
         .name = "tobii-official",
         // Clean OEM-style defaults, closest to Tobii's own head-tracking:
         // Tobii spline curve, wide 180°/90° caps, 2× head gain, 15% gaze lead.
@@ -296,6 +354,11 @@ pub const AdaptiveSmoother = struct {
         self.state += ewma * (value - self.state);
         return self.state;
     }
+pub fn resetTo(self: *AdaptiveSmoother, value: f64) void {
+        self.state = value;
+        self.last_raw = value;
+        self.init = true;
+    }
 };
 
 fn retentionForVelocity(v: f64, rest: f64) f64 {
@@ -365,6 +428,17 @@ pub const OneEuroFilter = struct {
         self.x_hat += a * (value - self.x_hat);
         return self.x_hat;
     }
+
+    /// Re-initialise with a known value (instant adopt on eye re-acquisition —
+    /// the internal state is stale from before the loss, and easing from it
+    /// reads as "lag when returning into the tracking range").
+    pub fn resetTo(self: *OneEuroFilter, value: f64) void {
+        self.x_hat = value;
+        self.x_prev = value;
+        self.dx_hat = 0;
+        self.init = true;
+        self.fc = 0;
+    }
 };
 
 // ─── Response curve ──────────────────────────────────────────────────
@@ -380,7 +454,10 @@ const YAW_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 4, 30 }, .{ 12, 70 }, .{ 20, 100 }, .{ 35, 160 },
 };
 const PITCH_UP_PTS = [_][2]f64{
-    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 20 }, .{ 20, 50 }, .{ 30, 90 },
+    // Symmetric with DOWN: up was (10,20),(20,50),(30,90) — at ±16° input up
+    // gave +36° vs down −64°, which read as "up is weaker". Mirror the down
+    // set so both directions hit 90° at 20° of head pitch.
+    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 90 },
 };
 const PITCH_DOWN_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 90 },
@@ -424,7 +501,7 @@ pub fn applyCurve(mode: CurveMode, v: f64, cap: f64, exp: f64, is_pitch: bool) f
             } else blk2: {
                 const x = @min(a, YAW_PTS[YAW_PTS.len - 1][0]);
                 break :blk2 catmullRom(&YAW_PTS, x) / 180.0;
-            };
+};
             const out = sign * norm * cap;
             break :blk std.math.clamp(out, -cap, cap);
         },
@@ -454,6 +531,11 @@ pub const RotationSmoother = struct {
     pub fn cutoff(self: *RotationSmoother) f64 {
         return self.euro.fc;
     }
+
+    pub fn resetTo(self: *RotationSmoother, value: f64) void {
+        self.accela.resetTo(value);
+        self.euro.resetTo(value);
+    }
 };
 
 pub const TobiiPipeline = struct {
@@ -470,13 +552,6 @@ ref_set: bool = false,
     settle_frames: u32 = 0,
     settle_sum: [3]f64 = .{ 0, 0, 0 },
     last_out: [6]f64 = .{ 0, 0, 0, 0, 0, 0 },
-    // Gentle auto-recenter: while the head sits near center AND still, slowly
-    // blend the reference toward the current pose so position/vertical/yaw
-    // offsets (seat drift, a stale startup settle) decay smoothly — no freeze
-    // and no pop, unlike the old hard reset.
-    rest_time: f64 = 0,
-    last_yaw: f64 = 0,
-    last_pitch: f64 = 0,
     // Head yaw speed (deg/s), used to gate the gaze blend: when the head is
     // actively rotating, the vestibular-ocular reflex counter-rotates the
     // eyes, so adding the fast-flying gaze signal shoves the output opposite
@@ -497,9 +572,11 @@ ref_set: bool = false,
     // gently unstick toward the real pose on long ones.
     n1_timer: f64 = 0,
     was_n1: bool = false, // previous frame had one eye (or glitched pair)
+    was_lost: bool = false, // eyes fully gone last frame — re-acquire instantly
     last_good_yaw: f64 = 0,
     last_good_pitch: f64 = 0,
     last_good_roll: f64 = 0,
+    last_good_y: f64 = 0, // last sane eye-midpoint Y (mm) — n=1 sanity gate
     has_last_good: bool = false,
     pos_hold: [3]f64 = .{ 0, 0, 0 },
     has_pos_hold: bool = false,
@@ -513,14 +590,23 @@ ref_set: bool = false,
     settle_roll_sum: f64 = 0,
     settle_yaw_frames: u32 = 0,
     manual_recenter: bool = false, // next valid frame captures ref instantly
+    // Gaze-witnessed corner hold: at the far corner the interocular yaw
+    // estimate saturates/reverses as the eyes approach the tracking edge,
+    // even though both eyes are still "seen" (n=2) — the view collapses back
+    // to center while the user still stares at the screen edge. The pinned
+    // gaze is the witness that they're still at the corner: hold the last
+    // reliable peak yaw until the gaze comes back.
+    corner_hold: bool = false,
+    corner_side: f64 = 0, // sign of the pinned gaze (+right / -left)
+    corner_peak: f64 = 0, // last reliable pre-curve yaw at the corner
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
-    const rest_recenter_s: f64 = 1.5; // hold still near center → blend ref toward pose
-    const rest_yaw_deg: f64 = 30.0; // only recenter when roughly facing center
-    const rest_pitch_deg: f64 = 20.0;
-    const rest_vel_deg_s: f64 = 5.0;
-    const recenter_rate: f64 = 0.02; // ref blend per frame once at rest
+    const corner_pin_deg: f64 = 12.0; // |gaze yaw| beyond this = pinned at the screen edge
+    const corner_hyst_deg: f64 = 0.5; // estimate must sag this far below the peak to engage
+    const pitch_glitch_deg: f64 = 5.0; // max genuine pitch change per frame (~450°/s)
+    const n1_y_sanity_mm: f64 = 25.0; // single-eye Y can't be this far from the midpoint
+    const n1_drift_gate_deg: f64 = 6.0; // only drift the one-eye yaw at real corners
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
     const zero_eps: f64 = 1e-3; // treat (x,z)≈(0,0) as a dropped eye
@@ -542,6 +628,9 @@ ref_set: bool = false,
         self.settle_yaw_frames = 0;
         self.n1_timer = 0;
         self.ref_set = false;
+        self.corner_hold = false;
+        self.corner_side = 0;
+        self.corner_peak = 0;
     }
 
     /// Process one gaze sample into a 6-DOF pose
@@ -669,7 +758,9 @@ ref_set: bool = false,
             }
         } else {
             // No valid eye at all (zero-vector shield caught both, or origins
-            // are gone). Hold the last full pose instead of snapping to 0.
+            // are gone). Hold the last full pose instead of snapping to 0 —
+            // the view waits here until a NEW pose can be calculated.
+            self.was_lost = true;
             return self.last_out;
         }
 
@@ -708,25 +799,49 @@ ref_set: bool = false,
                 self.n1_timer = 0;
                 var rel_yaw = inter_yaw - self.yaw_ref;
                 const rel_roll = inter_roll - self.roll_ref;
-                if (!self.has_last_good or self.was_n1) {
-                    // Fresh n=1→n=2 re-acquisition (or first sample): the
-                    // n=1 drift may have left last_good off the real pose by
-                    // more than glitch_deg, which the clamp would latch
-                    // forever. Re-arm so the REAL interocular pose is
-                    // adopted immediately instead of being rejected as a
-                    // "glitch".
+                if (!self.has_last_good or self.was_n1 or self.was_lost) {
+                    // Fresh n=1→n=2 re-acquisition (or first sample, or the
+                    // eyes just came back from a full loss): the n=1 drift may
+                    // have left last_good off the real pose by more than
+                    // glitch_deg, which the clamp would latch forever. Re-arm
+                    // so the REAL interocular pose is adopted immediately
+                    // instead of being rejected as a "glitch".
                     self.last_good_yaw = rel_yaw;
                     self.last_good_roll = rel_roll;
-                    self.last_good_pitch = pitch_est;
+                    // Pitch sanity on re-arm: a tracker eye-Y jump (like a
+                    // re-acquisition snapping the Y estimate) would otherwise
+                    // be adopted as a "new pose" and pin the view at the pitch
+                    // ceiling. Only adopt pitch if it's within a genuine
+                    // frame's reach of the last sane one — else keep the last
+                    // good pitch ("wait until a new one can be calculated").
+                    if (!self.has_last_good or @abs(pitch_est - self.last_good_pitch) <= pitch_glitch_deg) {
+                        self.last_good_pitch = pitch_est;
+                    }
+                    self.last_good_y = center[1];
                     self.has_last_good = true;
-                } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
-                    // Pre-occlusion hardware spike (impossible depth):
-                    // drop the frame, hold the last known good pose.
+                    if (self.was_lost) {
+                        // Eyes just came back: adopt the real pose INSTANTLY.
+                        // The smoothers' internal state is stale from before
+                        // the loss, and easing from it reads as "lag when
+                        // returning into the tracking range".
+                        self.rot_yaw.resetTo(rel_yaw);
+                        self.rot_pitch.resetTo(self.last_good_pitch * p.pitch_gain);
+                        self.roll_s.resetTo(rel_roll);
+                        self.was_lost = false;
+                    }
+                } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg or
+                    @abs(pitch_est - self.last_good_pitch) > pitch_glitch_deg)
+                {
+                    // Pre-occlusion hardware spike (impossible depth) or a
+                    // tracker eye-Y jump: drop the frame, hold the last known
+                    // good pose. Pitch never pins to the ceiling from a Y
+                    // glitch — it waits at the last sane position.
                     rel_yaw = self.last_good_yaw;
                 } else {
                     self.last_good_yaw = rel_yaw;
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
+                    self.last_good_y = center[1];
                 }
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
@@ -757,16 +872,43 @@ ref_set: bool = false,
                     self.last_good_yaw = 0;
                     self.last_good_roll = 0;
                     self.last_good_pitch = pitch_est;
+                    self.last_good_y = center[1];
                     self.has_last_good = true;
                 }
+                // Y-sanity: the single visible eye's Y can't be ~25 mm from
+                // the last midpoint (eyes are level; even a 20° head roll is
+                // only ~23 mm). A jump beyond that is a tracker artifact (the
+                // f3640-style eye-Y glitch) — hold the last sane pitch
+                // instead of letting it pin the view.
+                var n1_pitch = pitch_est;
+                if (@abs(center[1] - self.last_good_y) > n1_y_sanity_mm) {
+                    n1_pitch = self.last_good_pitch;
+                } else {
+                    self.last_good_pitch = pitch_est;
+                    self.last_good_y = center[1];
+                }
+                // Corner continuation: at far turns the NEAR eye is occluded
+                // by the nose and n stays 1 for a long stretch — a pure
+                // freeze makes the view "stop at halfway". The remaining eye
+                // still tracks the head's lateral translation, which
+                // correlates with the turn: yaw1e = atan(dx / neck) is
+                // calibrated to the interocular scale (post-gain hp ≈
+                // 0.36·yaw1e on this rig). Ease the held pose toward it —
+                // but ONLY once the held yaw is in real corner territory
+                // (|held| > gate): near center the single-eye dx is dominated
+                // by lean/translation, and chasing it drifts the view off the
+                // true pose. The drift rate is 10°/frame pre-gain (~24°/s
+                // final) so one-eye tracking keeps pace with a real turn.
                 const yaw1e = std.math.atan((center[0] - self.ref_mid[0]) / neck_mm) * 180.0 / std.math.pi;
-                const flip_sign: f64 = if (p.flip_yaw) -1.0 else 1.0;
-                const n1_target = 0.36 * yaw1e / (p.head_gain * flip_sign);
-                const n1_drift = 6.0 * dt; // °/frame pre-gain (≈12 °/s final)
-                self.last_good_yaw += std.math.clamp(n1_target - self.last_good_yaw, -n1_drift, n1_drift);
+                if (@abs(self.last_good_yaw) > n1_drift_gate_deg) {
+                    const flip_sign: f64 = if (p.flip_yaw) -1.0 else 1.0;
+                    const n1_target = 0.36 * yaw1e / (p.head_gain * flip_sign);
+                    const n1_drift = 10.0 * dt; // °/frame pre-gain (≈24 °/s final)
+                    self.last_good_yaw += std.math.clamp(n1_target - self.last_good_yaw, -n1_drift, n1_drift);
+                }
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
-                head_pitch = pitch_est;
+                head_pitch = n1_pitch;
                 self.was_n1 = true;
             }
             if (p.flip_yaw) head_yaw = -head_yaw;
@@ -827,39 +969,37 @@ ref_set: bool = false,
         // curve can no longer amplify a glance into a fake ~25° turn. Gaze
         // stays a subtle fine-aim tug. pitch_gain is applied pre-curve exactly
         // as before so the head pitch boost is unchanged.
-        const yaw = self.rot_yaw.update(head_yaw, dt, mode, p.smoothing, 10.0);
+        var yaw = self.rot_yaw.update(head_yaw, dt, mode, p.smoothing, 10.0);
         const pitch = self.rot_pitch.update(head_pitch * p.pitch_gain, dt, mode, p.smoothing, 10.0);
         const roll = self.roll_s.update(head_roll, dt, mode, p.smoothing, 10.0);
 
-        // 3b. Gentle auto-recenter: while the head sits near center AND still,
-        //     slowly blend the reference toward the current pose. This makes
-        //     seat drift / a stale startup settle decay smoothly over a couple
-        //     of seconds instead of holding a constant offset forever — and,
-        //     unlike the old hard reset, there is NO freeze and NO pop mid-turn.
-        //     Rest detection uses the HEAD-only pose, so a glance with the eyes
-        //     (which now only nudges the output a few degrees) can't fake "rest".
-        const dt_rest = @min(dt, 0.1);
-        const yaw_vel = @abs(yaw - self.last_yaw) / @max(dt_rest, 1e-6);
-        const pitch_vel = @abs(pitch - self.last_pitch) / @max(dt_rest, 1e-6);
-        if (@abs(yaw) < rest_yaw_deg and @abs(pitch) < rest_pitch_deg and
-            yaw_vel + pitch_vel < rest_vel_deg_s)
-        {
-            self.rest_time += dt_rest;
-        } else {
-            self.rest_time = 0;
-        }
-        self.last_yaw = yaw;
-        self.last_pitch = pitch;
-        if (self.rest_time >= rest_recenter_s and has_origins) {
-            // Blend ref_mid toward the current center, and the yaw/roll refs
-            // toward the current interocular pose, at a slow per-frame rate.
-            const r = recenter_rate * dt / 0.0111;
-            for (0..3) |i| self.ref_mid[i] += r * (center[i] - self.ref_mid[i]);
-            if (rot_both) {
-                self.yaw_ref += r * (inter_yaw - self.yaw_ref);
-                self.roll_ref += r * (inter_roll - self.roll_ref);
+        // 3c. Gaze-witnessed corner hold. At the far corner the interocular
+        //     yaw estimate saturates/reverses (the eyes approach the tracking
+        //     edge while both stay "seen"), so the view collapses back toward
+        //     center despite the user still staring at the screen edge. The
+        //     pinned gaze is the witness: while |gaze| stays beyond
+        //     corner_pin_deg on one side, feed the last reliable peak back
+        //     into the pipeline so the view WAITS at the corner. The smoother
+        //     state converges to the peak, so when the gaze unpins the view
+        //     sweeps back naturally at the smoothing rate — no pop.
+        const gaze_side = std.math.sign(gaze_yaw);
+        if (@abs(gaze_yaw) > corner_pin_deg) {
+            if (!self.corner_hold or self.corner_side != gaze_side) {
+                self.corner_hold = true;
+                self.corner_side = gaze_side;
+                self.corner_peak = yaw;
+            } else if (yaw * gaze_side > self.corner_peak * gaze_side) {
+                self.corner_peak = yaw; // turning deeper — track the new peak
             }
+            if ((yaw - self.corner_peak) * gaze_side < -corner_hyst_deg) {
+                yaw = self.corner_peak; // estimate sagging — hold the peak
+            }
+        } else {
+            self.corner_hold = false;
+            self.corner_side = 0;
+            self.corner_peak = 0;
         }
+
         // 4. Response curve + cap + deadzone on the HEAD signal, then add the
         //    gated gaze as a small absolute-degree fine-aim offset in OUTPUT
         //    space (post-curve). This keeps the gaze a subtle tug regardless of
@@ -896,9 +1036,9 @@ ref_set: bool = false,
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s}\n", .{
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} ch={d} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s}\n", .{
                 head_yaw, gaze_yaw, fy_head, head_pitch, gaze_pitch, fp_head, yaw, pitch, both, fy, fp,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, gate_eff, n, self.n1_timer, self.last_good_yaw,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, gate_eff, @intFromBool(self.corner_hold), n, self.n1_timer, self.last_good_yaw,
                 self.rot_yaw.cutoff(), @intFromBool(p.flip_yaw), @intFromBool(p.flip_pitch), smoothModeName(mode),
             });
         }

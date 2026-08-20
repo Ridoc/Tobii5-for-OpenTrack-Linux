@@ -118,7 +118,9 @@ code). Key parameters:
 **Built-in presets**: `tobii-official` (clean OEM-style defaults: Tobii spline
 curve, 180°/90° caps, 2× head gain, 15% gaze lead), `x4` (same OEM spline feel
 with a 120° yaw cap so the screen edge doesn't blow out), `x4-smooth`
-(buttery-smooth setup with 2.4× head gain, +20% stronger than `x4`).
+(buttery-smooth setup with 2.4× head gain, +20% stronger than `x4`). The
+pre-rework snapshots are kept as `tobii-official (old)`, `x4 (old)`,
+`x4-smooth (old)` so the previous feel is one click away.
 
 In the GUI, every slider has a text override (type + Enter) and the preset
 dropdown has **Save** / **Save as…** / **Delete** buttons.

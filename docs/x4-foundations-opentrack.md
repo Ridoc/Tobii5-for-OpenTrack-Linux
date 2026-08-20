@@ -187,8 +187,10 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
 **Built-in presets**: `tobii-official` (clean OEM-style defaults: Tobii spline
 curve, 180°/90° caps, 2× head gain, 15% gaze lead), `x4` (same OEM spline feel
 with a 120° yaw cap so the screen edge doesn't blow out), `x4-smooth`
-(buttery-smooth setup with 2.4× head gain, +20% stronger than `x4`). Save your
-tuned setup with `--save-preset <name>` or the GUI's **Save as…**.
+(buttery-smooth setup with 2.4× head gain, +20% stronger than `x4`). The
+pre-rework snapshots are kept as `tobii-official (old)`, `x4 (old)`,
+`x4-smooth (old)`. Save your tuned setup with `--save-preset <name>` or the
+GUI's **Save as…**.
 
 > **Why the old `x4-tuned` was wrong**: `head_gain 1.8` pre-multiplied the head
 > angle *before* the spline, so a physical 10° turn became 15° of input, which
