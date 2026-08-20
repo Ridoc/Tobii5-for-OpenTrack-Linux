@@ -479,6 +479,12 @@ ref_set: bool = false,
     rest_time: f64 = 0,
     last_yaw: f64 = 0,
     last_pitch: f64 = 0,
+    // Head yaw speed (deg/s), used to gate the gaze blend: when the head is
+    // actively rotating, the vestibular-ocular reflex counter-rotates the
+    // eyes, so adding the fast-flying gaze signal shoves the output opposite
+    // to the turn (the "spike to the upper-left when turning right").
+    last_head_yaw: f64 = 0,
+    has_last_head_yaw: bool = false,
     // Anti-latch state: a pre-occlusion glitch frame can spike the
     // interocular depth, and a subsequent n=1 frame would then latch that
     // spike forever (the one-eye fallback never gets within the reject
@@ -507,6 +513,13 @@ ref_set: bool = false,
     // Debounce: how many consecutive rot_both frames must pass before easing
     // back off the fallback. Prevents a one-eye flash from yanking the pose.
     both_frames: u32 = 0,
+    // Smoothed center-x used for the position-yaw fallback. A tracker eye-swap
+    // (which single eye it reports) can move the IPD-compensated center by a
+    // full IPD in one frame; without low-passing, that reads as a ~5° yaw pop.
+    fb_cx: f64 = 0,
+    fb_cz: f64 = 0,
+    fb_last_n: usize = 0,
+    fb_init: bool = false,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
@@ -669,9 +682,28 @@ ref_set: bool = false,
             // (the center is IPD-compensated), so a turn never freezes at the
             // point one eye leaves the trackbox. Crossfaded against the
             // interocular measurement so transitions don't pop.
+            //
+            // SIGN: interocular yaw = atan2(ez, ex) (left turn → negative).
+            // But the center x, in camera space, moves OPPOSITE the head:
+            // turn LEFT → center x goes POSITIVE. So we negate the atan2 so
+            // the fallback shares the interocular sign convention.
+            //
+            // The center is EWMA-smoothed per eye-count so a tracker eye-swap
+            // (which single eye it reports) can't inject a full-IPD step into
+            // pos_yaw. A genuine lateral lean is slow and passes through.
+            const fb_alpha: f64 = if (n == self.fb_last_n) 0.10 else 0.02;
+            if (!self.fb_init) {
+                self.fb_cx = center[0];
+                self.fb_cz = center[2];
+                self.fb_init = true;
+            } else {
+                self.fb_cx += fb_alpha * (center[0] - self.fb_cx);
+                self.fb_cz += fb_alpha * (center[2] - self.fb_cz);
+            }
+            self.fb_last_n = n;
             const pos_yaw = std.math.atan2(
-                center[0] - self.ref_mid[0],
-                @max(center[2], 50.0),
+                self.ref_mid[0] - self.fb_cx,
+                @max(self.fb_cz, 50.0),
             ) * 180.0 / std.math.pi;
             if (rot_both) {
                 self.n1_timer = 0;
@@ -731,9 +763,26 @@ ref_set: bool = false,
         // 3. blend (OEM 85/15) + pitch boost + smoothing. Rotation smoothing follows
 //    the selected SmoothMode (One Euro by default); the reject-and-hold
 //    spike rejection now lives at the interocular clamp above.
+//
+//    The gaze share is gated by head yaw speed: while the head is rotating,
+//    the eyes counter-rotate (VOR), so adding the fast gaze signal would fire
+//    a short spike OPPOSITE to the turn. At rest (or slow aiming), gaze blends
+//    fully as the fine-aim "tug". Gate eases 8 → 25 °/s, 1 → 0.
         const mode: SmoothMode = @enumFromInt(@min(p.smooth_mode, @intFromEnum(SmoothMode.none)));
-        const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio;
-        const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio) * p.pitch_gain;
+        const head_speed = if (self.has_last_head_yaw and dt > 0)
+            @abs(head_yaw - self.last_head_yaw) / dt
+        else
+            0.0;
+        self.last_head_yaw = head_yaw;
+        self.has_last_head_yaw = true;
+        const gate = if (head_speed <= 8.0)
+            1.0
+        else if (head_speed >= 25.0)
+            0.0
+        else
+            1.0 - (head_speed - 8.0) / 17.0;
+        const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio * gate;
+        const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio * gate) * p.pitch_gain;
         const yaw = self.rot_yaw.update(raw_yaw, dt, mode, p.smoothing, 10.0);
         const pitch = self.rot_pitch.update(raw_pitch, dt, mode, p.smoothing, 10.0);
         const roll = self.roll_s.update(head_roll, dt, mode, p.smoothing, 10.0);
@@ -773,9 +822,9 @@ ref_set: bool = false,
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
                 head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, self.fb_blend, n, self.n1_timer, self.last_good_yaw,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, self.fb_blend, gate, n, self.n1_timer, self.last_good_yaw,
                 self.rot_yaw.cutoff(), smoothModeName(mode),
             });
         }
