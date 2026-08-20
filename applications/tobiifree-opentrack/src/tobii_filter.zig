@@ -379,7 +379,11 @@ pub const OneEuroFilter = struct {
 // ─── Response curve ──────────────────────────────────────────────────
 
 const YAW_PTS = [_][2]f64{
-    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 20 }, .{ 20, 75 }, .{ 35, 180 },
+    // Steep at the low end: the raw interocular head yaw is geometrically
+    // small (+/-8 deg pre-gain at 600mm), so a gentle curve leaves a full head
+    // turn at only ~48 deg. 8 deg input -> 40, 16 -> 110, so small turns sweep
+    // the cockpit. Pitch has its own (flatter) curves.
+    .{ 0, 0 }, .{ 2, 0 }, .{ 8, 40 }, .{ 16, 110 }, .{ 35, 180 },
 };
 const PITCH_UP_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 2, 0 }, .{ 10, 20 }, .{ 20, 50 }, .{ 30, 90 },
