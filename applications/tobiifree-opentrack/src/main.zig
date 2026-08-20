@@ -688,7 +688,7 @@ fn syncSliders() void {
     }
     if (g_dropdown_curve) |dd| c.gtk_drop_down_set_selected(@ptrCast(dd), g_opts.p.curve_mode);
     if (g_dropdown_smooth) |dd| c.gtk_drop_down_set_selected(@ptrCast(dd), g_opts.p.smooth_mode);
-    if (g_check_flip_yaw) |cb| c.gtk_check_button_set_active(@ptrCast(cb), @intFromBool(g_opts.p.flip_yaw));
+    if (g_check_flip_yaw) |cb| c.gtk_toggle_button_set_active(@ptrCast(cb), @intFromBool(g_opts.p.flip_yaw));
     if (g_check_flip_pitch) |cb| c.gtk_check_button_set_active(@ptrCast(cb), @intFromBool(g_opts.p.flip_pitch));
     updateSourceLabel();
 }
@@ -705,6 +705,8 @@ fn loadPreset(idx: usize) void {
     if (g_btn_delete) |b| c.gtk_widget_set_sensitive(wptr(b), @intFromBool(!is_builtin));
 }
 
+var g_syncing_preset_ui: bool = false;
+
 fn refreshPresetStrings() void {
     const sl = c.gtk_string_list_new(null);
     for (g_preset_list.items) |p| {
@@ -716,14 +718,17 @@ fn refreshPresetStrings() void {
         c.gtk_string_list_append(sl, zbuf[0..name.len :0].ptr);
     }
     if (g_dropdown_preset) |dd| {
+        g_syncing_preset_ui = true;
         c.gtk_drop_down_set_model(@ptrCast(dd), @ptrCast(sl));
         c.gtk_drop_down_set_selected(@ptrCast(dd), @intCast(g_cur_preset_idx));
+        g_syncing_preset_ui = false;
     }
     if (g_strings_preset) |old| c.g_object_unref(@ptrCast(old));
     g_strings_preset = sl;
 }
 
 fn onPresetChanged(obj: ?*c.GObject, _: ?*c.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    if (g_syncing_preset_ui) return;
     const dd: *c.GtkDropDown = @ptrCast(@alignCast(obj));
     const idx = c.gtk_drop_down_get_selected(dd);
     if (idx >= g_preset_list.items.len) return;

@@ -76,8 +76,8 @@ The bridge opens a small **GTK4 status window** showing the live pose values
 (X/Y/Z, Yaw/Pitch/Roll) with a **live eye/head visualization** (gaze point on
 a mini screen + a head figure showing the yaw/pitch estimation), **live tuning
 sliders** and a **preset system** —
-switch between built-in profiles (`tobii-official`, `tobii-official-safe`,
-`x4-tuned`, `x4-legacy`) or save your own. All changes apply to the stream
+switch between built-in profiles (`tobii-official`, `x4`, `x4-smooth`) or
+save your own. All changes apply to the stream
 immediately, no restart needed. Pass `--headless` for console-only operation.
 
 ### In-game setup
@@ -115,10 +115,10 @@ code). Key parameters:
 | `--no-position` | — | rotation-only (zeros for head X/Y/Z) |
 | `--headless` | — | no GUI window, console logging only |
 
-**Built-in presets**: `tobii-official` (OEM defaults: Tobii spline curve,
-180°/90° caps, 2× head gain, 15% gaze lead), `tobii-official-safe` (same but
-60°/40° caps), `x4-tuned` (X4: OEM Tobii spline, head 1.0×, 25% gaze lead,
-180°/90° caps), `x4-legacy` (previous linear gaze-only behavior).
+**Built-in presets**: `tobii-official` (clean OEM-style defaults: Tobii spline
+curve, 180°/90° caps, 2× head gain, 15% gaze lead), `x4` (same OEM spline feel
+with a 120° yaw cap so the screen edge doesn't blow out), `x4-smooth`
+(buttery-smooth setup with 2.4× head gain, +20% stronger than `x4`).
 
 In the GUI, every slider has a text override (type + Enter) and the preset
 dropdown has **Save** / **Save as…** / **Delete** buttons.

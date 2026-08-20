@@ -72,6 +72,12 @@ pub const Preset = struct {
 pub const BUILTIN_PRESETS = [_]Preset{
     .{
         .name = "tobii-official",
+        // Clean OEM-style defaults, closest to Tobii's own head-tracking:
+        // Tobii spline curve, wide 180°/90° caps, 2× head gain, 15% gaze lead.
+        // Direction: interocular atan2(ez, ex) yields POSITIVE yaw on a
+        // head-LEFT turn (verified in trace), which is opposite to X4's
+        // expectation (head-left = negative yaw), so flip the whole yaw
+        // signal (head AND gaze — see blend section) at the source.
         .max_yaw = 180.0,
         .max_pitch = 90.0,
         .gaze_scale = 40.0,
@@ -81,15 +87,19 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .deadzone = 0.15,
         .head_gain = 2.0,
         .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
         .pos_gain = 2.0,
         .neck = 13.0,
         .curve_mode = 2,
         .curve_exp = 0.5,
+        .flip_yaw = true,
     },
     .{
-        .name = "tobii-official-safe",
-        .max_yaw = 60.0,
-        .max_pitch = 40.0,
+        .name = "x4",
+        // X4 build: same OEM spline feel as tobii-official but with a 120°
+        // yaw cap so the screen edge doesn't blow to 180 and feel bimodal.
+        .max_yaw = 120.0,
+        .max_pitch = 90.0,
         .gaze_scale = 40.0,
         .gaze_scale_pitch = 30.0,
         .smoothing = 0.90,
@@ -97,53 +107,33 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .deadzone = 0.15,
         .head_gain = 2.0,
         .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
         .pos_gain = 2.0,
         .neck = 13.0,
         .curve_mode = 2,
         .curve_exp = 0.5,
+        .flip_yaw = true,
     },
     .{
-        .name = "x4-tuned",
-        // 1. Let the Tobii spline output its full range; do not clamp it early.
-        //    Capped at 120 so the edge doesn't blow to 180 and feel bimodal.
+        .name = "x4-smooth",
+        // X4-Smooth: the buttery setup (matches what felt great in testing),
+        // now with head_gain raised 2.0 → 2.4 (+20%) so head turns are
+        // stronger while keeping the smooth, stable feel.
         .max_yaw = 120.0,
         .max_pitch = 90.0,
-
-        // 2. Gaze tracking (Eye input)
-        .gaze_scale = 35.0,
-        .gaze_scale_pitch = 25.0,
-        .eye_ratio = 0.25, // noticeable but smooth OEM "tug"
-
-        // 3. Smoothers
-        .smoothing = 0.93,     // high retention at rest to kill jitter
-        .pos_smoothing = 0.96, // keep translation buttery smooth
-        .deadzone = 0.2,       // micro-deadzone (blends into spline's native 2° flatline)
-
-        // 4. Gain (do NOT pre-multiply head angle into the spline)
-        .head_gain = 2.0, // head turns reach the spline boost region
-        .pos_gain = 1.2, // slight boost for leaning in the cockpit
-        .pitch_gain = 1.5, // +50% pitch for testing (up/down is weak)
-        .neck = 12.0,
-
-        // 5. Curve
-        .curve_mode = 2,  // Tobii Catmull-Rom spline
-        .curve_exp = 1.0, // unused by mode 2; kept at 1.0 to prevent math errors
-    },
-    .{
-        .name = "x4-legacy",
-        .max_yaw = 37.5,
-        .max_pitch = 22.5,
-        .gaze_scale = 75.0,
-        .gaze_scale_pitch = 45.0,
-        .smoothing = 0.30,
-        .pos_smoothing = 0.30,
-        .deadzone = 0.2,
-        .head_gain = 0.0,
-        .eye_ratio = 1.0,
-        .pos_gain = 1.0,
+        .gaze_scale = 40.0,
+        .gaze_scale_pitch = 30.0,
+        .smoothing = 0.90,
+        .pos_smoothing = 0.95,
+        .deadzone = 0.15,
+        .head_gain = 2.4,
+        .eye_ratio = 0.15,
+        .pitch_gain = 1.0,
+        .pos_gain = 2.0,
         .neck = 13.0,
-        .curve_mode = 0,
-        .curve_exp = 1.0,
+        .curve_mode = 2,
+        .curve_exp = 0.5,
+        .flip_yaw = true,
     },
 };
 
@@ -383,10 +373,11 @@ const YAW_PTS = [_][2]f64{
     // Proportional ramp, no dead flatline: the interocular yaw only spans
     // ~+/-9 deg pre-gain, so the old {2,0}+{8,40}+{16,110} curve was bimodal
     // (nothing near center, then a cliff to huge values). This set maps the
-    // reachable range smoothly: 4 deg -> 25, 8 -> 42, 12 -> 60, so a modest
-    // turn always produces a proportionate sweep. The micro center is handled
-    // by the deadzone, not a curve flatline. max_yaw (120 in x4-tuned) caps it.
-    .{ 0, 0 }, .{ 4, 25 }, .{ 12, 60 }, .{ 20, 100 }, .{ 35, 160 },
+    // reachable range smoothly: 4 deg -> 30, 12 -> 70, so a modest turn
+    // always produces a proportionate sweep (+~20% middle response vs the
+    // previous 25/60, corners unchanged). The micro center is handled
+    // by the deadzone, not a curve flatline. max_yaw (120 in x4/x4-smooth) caps it.
+    .{ 0, 0 }, .{ 4, 30 }, .{ 12, 70 }, .{ 20, 100 }, .{ 35, 160 },
 };
 const PITCH_UP_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 2, 0 }, .{ 10, 20 }, .{ 20, 50 }, .{ 30, 90 },
@@ -492,12 +483,20 @@ ref_set: bool = false,
     // to the turn (the "spike to the upper-left when turning right").
     last_head_yaw: f64 = 0,
     has_last_head_yaw: bool = false,
+    last_head_pitch: f64 = 0,
+    has_last_head_pitch: bool = false,
+    // Eased copy of the VOR gate: the raw gate is near-binary (dir_gate 0/1
+    // times a speed taper), and toggling it 1↔0 snaps the gaze tug in/out in
+    // one frame — a visible step even at small eye ratios. We low-pass it so
+    // the tug eases in/out over ~150 ms instead.
+    gate_smooth: f64 = 1.0,
     // Anti-latch state: a pre-occlusion glitch frame can spike the
     // interocular depth, and a subsequent n=1 frame would then latch that
     // spike forever (the one-eye fallback never gets within the reject
     // threshold). n1_timer/last_good* let us hold through short drops and
     // gently unstick toward the real pose on long ones.
     n1_timer: f64 = 0,
+    was_n1: bool = false, // previous frame had one eye (or glitched pair)
     last_good_yaw: f64 = 0,
     last_good_pitch: f64 = 0,
     last_good_roll: f64 = 0,
@@ -513,6 +512,7 @@ ref_set: bool = false,
     settle_yaw_sum: f64 = 0,
     settle_roll_sum: f64 = 0,
     settle_yaw_frames: u32 = 0,
+    manual_recenter: bool = false, // next valid frame captures ref instantly
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
@@ -534,6 +534,7 @@ ref_set: bool = false,
     /// settle window accumulates, then swap atomically. Only the settle
     /// accumulators and ref_set are cleared so a fresh ref re-captures.
     pub fn reset(self: *TobiiPipeline) void {
+        self.manual_recenter = true;
         self.settle_frames = 0;
         self.settle_sum = .{ 0, 0, 0 };
         self.settle_yaw_sum = 0;
@@ -605,6 +606,26 @@ ref_set: bool = false,
                 center[0] -= half_ipd_mm; // right eye sits +IPD/2 from center
             }
             if (!self.ref_set) {
+                // Manual recenter: capture the CURRENT pose as the new
+                // reference instantly (no 1s average — a moving head or a
+                // dropped eye during the settle would land the ref somewhere
+                // random and make recenter appear dead).
+                if (self.manual_recenter) {
+                    self.manual_recenter = false;
+                    self.ref_mid = center;
+                    self.ref_set = true;
+                    self.had_ref = true;
+                    self.has_last_good = false;
+                    if (rot_both) {
+                        self.yaw_ref = inter_yaw;
+                        self.roll_ref = inter_roll;
+                    }
+                    self.settle_frames = 0;
+                    self.settle_sum = .{ 0, 0, 0 };
+                    self.settle_yaw_sum = 0;
+                    self.settle_roll_sum = 0;
+                    self.settle_yaw_frames = 0;
+                } else {
                 // Settle window: average the origin before locking the ref so
                 // the tracker's acquisition wobble can't become a fixed offset.
                 // Also average the absolute interocular yaw/roll so dead-center
@@ -626,6 +647,11 @@ ref_set: bool = false,
                     }
                     self.ref_set = true;
                     self.had_ref = true;
+                    // The ref just moved: re-arm last-good so the new rel_yaw
+                    // (≈0 after a recenter) can't trip the 10°/frame glitch
+                    // latch against the pre-swap pose, which would freeze yaw
+                    // at the old offset forever.
+                    self.has_last_good = false;
                     self.settle_frames = 0;
                     self.settle_sum = .{ 0, 0, 0 };
                     self.settle_yaw_sum = 0;
@@ -635,6 +661,7 @@ ref_set: bool = false,
                     // Startup: no reference yet — emit zeros until the first
                     // settle completes (~1 s).
                     return .{ 0, 0, 0, 0, 0, 0 };
+                }
                 }
                 // Re-settle (had_ref, manual recenter): fall through and keep
                 // tracking with the OLD refs. No freeze, no pop — the refs
@@ -681,7 +708,13 @@ ref_set: bool = false,
                 self.n1_timer = 0;
                 var rel_yaw = inter_yaw - self.yaw_ref;
                 const rel_roll = inter_roll - self.roll_ref;
-                if (!self.has_last_good) {
+                if (!self.has_last_good or self.was_n1) {
+                    // Fresh n=1→n=2 re-acquisition (or first sample): the
+                    // n=1 drift may have left last_good off the real pose by
+                    // more than glitch_deg, which the clamp would latch
+                    // forever. Re-arm so the REAL interocular pose is
+                    // adopted immediately instead of being rejected as a
+                    // "glitch".
                     self.last_good_yaw = rel_yaw;
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
@@ -698,6 +731,7 @@ ref_set: bool = false,
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
+                self.was_n1 = false;
             } else {
                 // One eye (or a glitched pair): HOLD yaw/roll, keep pitch live.
                 // Head ROTATION does not translate the eye midpoint (it
@@ -708,6 +742,16 @@ ref_set: bool = false,
                 // atan(dy/neck) from center-Y = genuine translation, which a
                 // single (IPD-compensated) eye still measures, so it stays
                 // LIVE. Both eyes return -> interocular resumes seamlessly.
+                //
+                // Corner continuation: at far turns the NEAR eye is occluded
+                // by the nose and n stays 1 for a long stretch — a pure
+                // freeze makes the view "stop at halfway" and jitter when the
+                // eye re-acquires. The remaining eye still tracks the head's
+                // lateral translation, which correlates with the turn:
+                // yaw1e = atan(dx / neck) is calibrated to the interocular
+                // scale (post-gain hp ≈ 0.36·yaw1e on this rig), and we ease
+                // the held pose toward it, rate-limited so lean crosstalk or
+                // noise can't snap the view.
                 self.n1_timer += dt;
                 if (!self.has_last_good) {
                     self.last_good_yaw = 0;
@@ -715,9 +759,15 @@ ref_set: bool = false,
                     self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
                 }
+                const yaw1e = std.math.atan((center[0] - self.ref_mid[0]) / neck_mm) * 180.0 / std.math.pi;
+                const flip_sign: f64 = if (p.flip_yaw) -1.0 else 1.0;
+                const n1_target = 0.36 * yaw1e / (p.head_gain * flip_sign);
+                const n1_drift = 6.0 * dt; // °/frame pre-gain (≈12 °/s final)
+                self.last_good_yaw += std.math.clamp(n1_target - self.last_good_yaw, -n1_drift, n1_drift);
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
                 head_pitch = pitch_est;
+                self.was_n1 = true;
             }
             if (p.flip_yaw) head_yaw = -head_yaw;
             if (p.flip_pitch) head_pitch = -head_pitch;
@@ -734,21 +784,31 @@ ref_set: bool = false,
 //    a short spike OPPOSITE to the turn. At rest (or slow aiming), gaze blends
 //    fully as the fine-aim "tug". Gate eases 8 → 25 °/s, 1 → 0.
         const mode: SmoothMode = @enumFromInt(@min(p.smooth_mode, @intFromEnum(SmoothMode.none)));
-        const head_dv = if (self.has_last_head_yaw and dt > 0)
+        const head_dv_yaw = if (self.has_last_head_yaw and dt > 0)
             head_yaw - self.last_head_yaw
         else
             0.0;
-        const head_speed = @abs(head_dv) / @max(dt, 1e-6);
+        const head_dv_pitch = if (self.has_last_head_pitch and dt > 0)
+            head_pitch - self.last_head_pitch
+        else
+            0.0;
+        const head_speed = @sqrt(head_dv_yaw * head_dv_yaw + head_dv_pitch * head_dv_pitch) / @max(dt, 1e-6);
         self.last_head_yaw = head_yaw;
+        self.last_head_pitch = head_pitch;
         self.has_last_head_yaw = true;
+        self.has_last_head_pitch = true;
         // Gaze is the fine-aim "tug" — but only when it AGREES with the head's
         // turn direction. The VOR reflex counter-rotates the eyes during a head
         // turn, so an opposing gaze is exactly the artifact that fired the
         // "counter-move right when turning left fast" spike (and worse on one
-        // side where the eye-loss fallback + gate timing align). Direction-aware:
+        // side where the eye-loss fallback + gate timing align). Direction-aware
+        // on the FULL velocity vector (yaw AND pitch): an opposing glance on
+        // either axis is dropped (this also kills the phantom pitch when the
+        // head nods but the eyes glance vertically).
         //   gate = 0 if head moving AND gaze opposes head velocity (drop VOR)
         //           else speed-based 8..25 deg/s taper (aiming while still)
-        const dir_gate: f64 = if (head_speed > 5.0 and (head_dv * gaze_yaw) < 0.0) 0.0 else 1.0;
+        const dot = head_dv_yaw * gaze_yaw + head_dv_pitch * gaze_pitch;
+        const dir_gate: f64 = if (head_speed > 5.0 and dot < 0.0) 0.0 else 1.0;
         const speed_gate = if (head_speed <= 8.0)
             1.0
         else if (head_speed >= 25.0)
@@ -756,10 +816,19 @@ ref_set: bool = false,
         else
             1.0 - (head_speed - 8.0) / 17.0;
         const gate = dir_gate * speed_gate;
-        const raw_yaw = head_yaw + gaze_yaw * p.eye_ratio * gate;
-        const raw_pitch = (head_pitch + gaze_pitch * p.eye_ratio * gate) * p.pitch_gain;
-        const yaw = self.rot_yaw.update(raw_yaw, dt, mode, p.smoothing, 10.0);
-        const pitch = self.rot_pitch.update(raw_pitch, dt, mode, p.smoothing, 10.0);
+        // Ease the gate so the gaze tug fades in/out instead of stepping
+        // (a 1↔0 snap moves the output by ±gaze·ratio in one frame).
+        const gate_react: f64 = 8.0; // 1/s — ~120 ms to re-arm the tug
+        self.gate_smooth += (gate - self.gate_smooth) * @min(1.0, dt * gate_react);
+        const gate_eff = self.gate_smooth;
+
+        // Head-only rotation smoothing. The gaze is added AFTER the response
+        // curve (below) as a small absolute-degree offset, so the steep head
+        // curve can no longer amplify a glance into a fake ~25° turn. Gaze
+        // stays a subtle fine-aim tug. pitch_gain is applied pre-curve exactly
+        // as before so the head pitch boost is unchanged.
+        const yaw = self.rot_yaw.update(head_yaw, dt, mode, p.smoothing, 10.0);
+        const pitch = self.rot_pitch.update(head_pitch * p.pitch_gain, dt, mode, p.smoothing, 10.0);
         const roll = self.roll_s.update(head_roll, dt, mode, p.smoothing, 10.0);
 
         // 3b. Gentle auto-recenter: while the head sits near center AND still,
@@ -767,6 +836,8 @@ ref_set: bool = false,
         //     seat drift / a stale startup settle decay smoothly over a couple
         //     of seconds instead of holding a constant offset forever — and,
         //     unlike the old hard reset, there is NO freeze and NO pop mid-turn.
+        //     Rest detection uses the HEAD-only pose, so a glance with the eyes
+        //     (which now only nudges the output a few degrees) can't fake "rest".
         const dt_rest = @min(dt, 0.1);
         const yaw_vel = @abs(yaw - self.last_yaw) / @max(dt_rest, 1e-6);
         const pitch_vel = @abs(pitch - self.last_pitch) / @max(dt_rest, 1e-6);
@@ -789,22 +860,33 @@ ref_set: bool = false,
                 self.roll_ref += r * (inter_roll - self.roll_ref);
             }
         }
-        // 4. response curve + cap + deadzone. (Computed here so the trace can
-        //    report the true output fy/fp going to X4.)
-        const fy = deadzone(applyCurve(
+        // 4. Response curve + cap + deadzone on the HEAD signal, then add the
+        //    gated gaze as a small absolute-degree fine-aim offset in OUTPUT
+        //    space (post-curve). This keeps the gaze a subtle tug regardless of
+        //    how steep the head curve is. The flip applies to the head signal
+        //    above (line ~722) AND to the gaze offset here, so they always
+        //    point the same way.
+        const fy_head = deadzone(applyCurve(
             @enumFromInt(p.curve_mode),
             yaw,
             p.max_yaw,
             p.curve_exp,
             false,
         ), p.deadzone);
-        const fp = deadzone(applyCurve(
+        const fp_head = deadzone(applyCurve(
             @enumFromInt(p.curve_mode),
             pitch,
             p.max_pitch,
             p.curve_exp,
             true,
         ), p.deadzone);
+        // Gaze tug direction: gaze screen coords (right/up = +) already match
+        // the X4 output convention, so the flip must apply to the HEAD signal
+        // only. Flipping the gaze too (old code) inverted the tug: glance
+        // right → view yanked left, and with the binary gate snapping 1↔0 it
+        // stepped ±(gaze·ratio) in one frame (up to ~10° at 0.47 ratio).
+        const fy = fy_head + gaze_yaw * p.eye_ratio * gate_eff;
+        const fp = fp_head + gaze_pitch * p.eye_ratio * gate_eff;
 
         if (std.posix.getenv("TOBII_TRACE") != null) {
             var buf2: [96]u8 = undefined;
@@ -814,10 +896,10 @@ ref_set: bool = false,
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
-                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both, fy, fp,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, n, self.n1_timer, self.last_good_yaw,
-                self.rot_yaw.cutoff(), smoothModeName(mode),
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s}\n", .{
+                head_yaw, gaze_yaw, fy_head, head_pitch, gaze_pitch, fp_head, yaw, pitch, both, fy, fp,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, gate_eff, n, self.n1_timer, self.last_good_yaw,
+                self.rot_yaw.cutoff(), @intFromBool(p.flip_yaw), @intFromBool(p.flip_pitch), smoothModeName(mode),
             });
         }
 
