@@ -105,7 +105,8 @@ pub const BUILTIN_PRESETS = [_]Preset{
     .{
         .name = "x4-tuned",
         // 1. Let the Tobii spline output its full range; do not clamp it early.
-        .max_yaw = 180.0,
+        //    Capped at 120 so the edge doesn't blow to 180 and feel bimodal.
+        .max_yaw = 120.0,
         .max_pitch = 90.0,
 
         // 2. Gaze tracking (Eye input)
@@ -379,11 +380,13 @@ pub const OneEuroFilter = struct {
 // ─── Response curve ──────────────────────────────────────────────────
 
 const YAW_PTS = [_][2]f64{
-    // Steep at the low end: the raw interocular head yaw is geometrically
-    // small (+/-8 deg pre-gain at 600mm), so a gentle curve leaves a full head
-    // turn at only ~48 deg. 8 deg input -> 40, 16 -> 110, so small turns sweep
-    // the cockpit. Pitch has its own (flatter) curves.
-    .{ 0, 0 }, .{ 2, 0 }, .{ 8, 40 }, .{ 16, 110 }, .{ 35, 180 },
+    // Proportional ramp, no dead flatline: the interocular yaw only spans
+    // ~+/-9 deg pre-gain, so the old {2,0}+{8,40}+{16,110} curve was bimodal
+    // (nothing near center, then a cliff to huge values). This set maps the
+    // reachable range smoothly: 4 deg -> 25, 8 -> 42, 12 -> 60, so a modest
+    // turn always produces a proportionate sweep. The micro center is handled
+    // by the deadzone, not a curve flatline. max_yaw (120 in x4-tuned) caps it.
+    .{ 0, 0 }, .{ 4, 25 }, .{ 12, 60 }, .{ 20, 100 }, .{ 35, 160 },
 };
 const PITCH_UP_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 2, 0 }, .{ 10, 20 }, .{ 20, 50 }, .{ 30, 90 },
@@ -525,14 +528,19 @@ ref_set: bool = false,
     const n1_hold_s: f64 = 0.5; // hold through n=1 (blinks/glances) this long
     const unstick_rate: f64 = 2.0; // lerp rate toward the fallback once stuck
 
-    /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
-    /// and `last_out` so the view holds instead of zeroing during a re-settle.
+    /// Full reset (fresh acquisition / manual recenter). Preserves the
+    /// reference (ref_mid, yaw_ref/roll_ref) and the last-good pose so a
+    /// re-settle can't yank the view: the OLD refs keep tracking while the new
+    /// settle window accumulates, then swap atomically. Only the settle
+    /// accumulators and ref_set are cleared so a fresh ref re-captures.
     pub fn reset(self: *TobiiPipeline) void {
-        const keep_had = self.had_ref;
-        const keep_out = self.last_out;
-        self.* = .{};
-        self.had_ref = keep_had;
-        self.last_out = keep_out;
+        self.settle_frames = 0;
+        self.settle_sum = .{ 0, 0, 0 };
+        self.settle_yaw_sum = 0;
+        self.settle_roll_sum = 0;
+        self.settle_yaw_frames = 0;
+        self.n1_timer = 0;
+        self.ref_set = false;
     }
 
     /// Process one gaze sample into a 6-DOF pose
@@ -691,14 +699,15 @@ ref_set: bool = false,
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
             } else {
-                // One eye (or a glitched pair): HOLD the last-good rotation.
-                // Head rotation does NOT translate the eye midpoint (it
-                // pivots), so the center's lateral angle measures translation,
-                // not rotation — a fallback to it collapses yaw toward 0 and
-                // causes the snap-back/counter-move at the tracking edge. So we
-                // freeze the rigid pose and let only translation stay live
-                // (IPD-compensated below). Both eyes return -> interocular
-                // resumes seamlessly from where it was.
+                // One eye (or a glitched pair): HOLD yaw/roll, keep pitch live.
+                // Head ROTATION does not translate the eye midpoint (it
+                // pivots), so a fallback to the center's lateral angle
+                // measures translation, not rotation — it would collapse yaw
+                // toward 0 and snap the view back to center at the tracking
+                // edge. So yaw/roll freeze at the last-good pose. But pitch is
+                // atan(dy/neck) from center-Y = genuine translation, which a
+                // single (IPD-compensated) eye still measures, so it stays
+                // LIVE. Both eyes return -> interocular resumes seamlessly.
                 self.n1_timer += dt;
                 if (!self.has_last_good) {
                     self.last_good_yaw = 0;
@@ -708,7 +717,7 @@ ref_set: bool = false,
                 }
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
-                head_pitch = self.last_good_pitch;
+                head_pitch = pitch_est;
             }
             if (p.flip_yaw) head_yaw = -head_yaw;
             if (p.flip_pitch) head_pitch = -head_pitch;
