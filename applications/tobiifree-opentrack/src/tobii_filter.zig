@@ -482,6 +482,15 @@ pub const TobiiPipeline = struct {
     has_last_good: bool = false,
     pos_hold: [3]f64 = .{ 0, 0, 0 },
     has_pos_hold: bool = false,
+    // Absolute-pose recentering: interocular yaw/roll are ABSOLUTE
+    // measurements of the eye line (not ref-relative like pitch/position), so
+    // a calibration/seat offset survives every recenter. Capture them during
+    // the settle window and subtract, so dead-center head = 0°/0°.
+    yaw_ref: f64 = 0,
+    roll_ref: f64 = 0,
+    settle_yaw_sum: f64 = 0,
+    settle_roll_sum: f64 = 0,
+    settle_yaw_frames: u32 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const rest_recenter_s: f64 = 1.2; // hold still near center → re-center
@@ -538,6 +547,27 @@ pub const TobiiPipeline = struct {
             n += 1;
         }
         const has_origins = n > 0;
+
+        // Rotation uses BOTH eyes only when the interocular distance is within
+        // human bounds and the right eye is truly on the right (an eye-swap
+        // hallucination flips ex negative; a Z hallucination blows up dist).
+        // Otherwise degrade to the frozen one-eye path below. Computed up
+        // front so the settle window can also average the pose.
+        var rot_both = false;
+        var inter_yaw: f64 = 0;
+        var inter_roll: f64 = 0;
+        if (left_valid and right_valid) {
+            const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
+            const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
+            const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
+            const dist = @sqrt(ex * ex + ey * ey + ez * ez);
+            rot_both = dist >= min_ipd_mm and dist <= max_ipd_mm and ex > 0.0;
+            if (rot_both) {
+                inter_yaw = std.math.atan2(ez, ex) * 180.0 / std.math.pi;
+                inter_roll = std.math.atan2(ey, ex) * 180.0 / std.math.pi;
+            }
+        }
+
         if (has_origins) {
             if (n == 2) {
                 for (0..3) |i| center[i] *= 0.5;
@@ -549,35 +579,36 @@ pub const TobiiPipeline = struct {
             if (!self.ref_set) {
                 // Settle window: average the origin before locking the ref so
                 // the tracker's acquisition wobble can't become a fixed offset.
+                // Also average the absolute interocular yaw/roll so dead-center
+                // head → 0° (a seat/calibration offset can't persist).
                 for (0..3) |i| self.settle_sum[i] += center[i];
                 self.settle_frames += 1;
+                if (rot_both) {
+                    self.settle_yaw_sum += inter_yaw;
+                    self.settle_roll_sum += inter_roll;
+                    self.settle_yaw_frames += 1;
+                }
                 if (self.settle_frames >= settle_target) {
                     for (0..3) |i| {
                         self.ref_mid[i] = self.settle_sum[i] / @as(f64, @floatFromInt(self.settle_frames));
+                    }
+                    if (self.settle_yaw_frames > 0) {
+                        self.yaw_ref = self.settle_yaw_sum / @as(f64, @floatFromInt(self.settle_yaw_frames));
+                        self.roll_ref = self.settle_roll_sum / @as(f64, @floatFromInt(self.settle_yaw_frames));
                     }
                     self.ref_set = true;
                     self.had_ref = true;
                     self.settle_frames = 0;
                     self.settle_sum = .{ 0, 0, 0 };
+                    self.settle_yaw_sum = 0;
+                    self.settle_roll_sum = 0;
+                    self.settle_yaw_frames = 0;
                 } else if (self.had_ref) {
                     return self.last_out; // hold the view during a re-settle
                 } else {
                     return .{ 0, 0, 0, 0, 0, 0 }; // startup, no tracking yet
                 }
             }
-        }
-
-        // Rotation uses BOTH eyes only when the interocular distance is within
-        // human bounds and the right eye is truly on the right (an eye-swap
-        // hallucination flips ex negative; a Z hallucination blows up dist).
-        // Otherwise degrade to the frozen one-eye path below.
-        var rot_both = false;
-        if (left_valid and right_valid) {
-            const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
-            const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
-            const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
-            const dist = @sqrt(ex * ex + ey * ey + ez * ez);
-            rot_both = dist >= min_ipd_mm and dist <= max_ipd_mm and ex > 0.0;
         }
 
         // 1. gaze → angles, heavily filtered.
@@ -609,24 +640,21 @@ pub const TobiiPipeline = struct {
             const neck_mm = p.neck * 10.0;
             if (rot_both) {
                 self.n1_timer = 0;
-                const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
-                const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
-                const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
-                var inter_yaw = std.math.atan2(ez, ex) * 180.0 / std.math.pi;
-                const inter_roll = std.math.atan2(ey, ex) * 180.0 / std.math.pi;
+                var rel_yaw = inter_yaw - self.yaw_ref;
+                const rel_roll = inter_roll - self.roll_ref;
                 const pitch_est = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
                 if (!self.has_last_good) {
-                    self.last_good_yaw = inter_yaw;
-                    self.last_good_roll = inter_roll;
+                    self.last_good_yaw = rel_yaw;
+                    self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
-                } else if (@abs(inter_yaw - self.last_good_yaw) > glitch_deg) {
+                } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
                     // Pre-occlusion hardware spike (impossible depth):
                     // drop the frame, hold the last known good pose.
-                    inter_yaw = self.last_good_yaw;
+                    rel_yaw = self.last_good_yaw;
                 } else {
-                    self.last_good_yaw = inter_yaw;
-                    self.last_good_roll = inter_roll;
+                    self.last_good_yaw = rel_yaw;
+                    self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                 }
                 head_yaw = self.last_good_yaw;
@@ -690,9 +718,9 @@ pub const TobiiPipeline = struct {
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
                 head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], n, self.n1_timer, self.last_good_yaw,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, n, self.n1_timer, self.last_good_yaw,
                 self.rot_yaw.cutoff(), smoothModeName(mode),
             });
         }

@@ -171,12 +171,17 @@ is the only place to tune. The pipeline replicates the OEM Tobii feel:
    glitch/eye-swap. **Rotation then freezes** to the last good pose (one eye
    can't measure yaw/roll without translation crosstalk), while translation
    keeps tracking so you can still lean.
-4. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
-5. **Smoothing** — selectable mode: **One Euro** (default; adaptive cutoff
+4. **Recenter** — interocular yaw/roll are *absolute* (the eye line vs the
+   sensor), so a seat/calibration offset would persist forever. The settle
+   window averages them into a `yaw_ref`/`roll_ref` and subtracts them, so
+   dead-center head → 0°/0°; the auto-recenter (still head near center) and
+   the GUI **Recenter** button re-capture it live.
+5. **Blend** — `head + smoothed_gaze × eye_ratio` (OEM 85/15).
+6. **Smoothing** — selectable mode: **One Euro** (default; adaptive cutoff
    `fc = fc_min + β·|speed|` kills Z-depth jitter at rest with no lag on fast
    turns), **Accela** (legacy velocity-adaptive retention), or **None**
    (raw, for debugging). Translation always uses the heavier `pos_smoothing`.
-6. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
+7. **Curve** — `tobii` spline (2→0, 10→20, 20→75, 35→180 for yaw; asymmetric
    pitch) or `power`/`linear`, capped by the yaw/pitch gains, then the deadzone.
 
 **Built-in presets**: `tobii-official` (OEM curve + 180/90 caps),

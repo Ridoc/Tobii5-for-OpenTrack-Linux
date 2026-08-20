@@ -131,6 +131,8 @@ var g_saveas_entry: ?*c.GtkEntry = null;
 
 var g_srcbuf: [192]u8 = undefined;
 var g_tick: u32 = 0;
+// UI → stream-thread request to re-settle the reference (recenters yaw/roll).
+var g_recenter_request: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 const SensAxis = enum {
     yaw,
@@ -341,6 +343,8 @@ fn onGaze(sample: *const core.GazeSample) void {
         }
         return;
     }
+    // Manual recenter (GUI button): re-settle so dead-center head → 0°/0°.
+    if (g_recenter_request.swap(false, .acq_rel)) g_pipeline.reset();
     // Re-acquisition: after a sustained full eye loss the tracker re-locks on
     // slightly different absolute origins, so re-center. Short losses
     // (blinks) never trigger this. Delivery stalls keep eyes valid → no reset.
@@ -662,8 +666,8 @@ fn onTick(_: ?*anyopaque) callconv(.c) c_int {
     }
     g_tick +%= 1;
     if (g_tick % 125 == 0) updateLabels(); // numbers at 1 Hz (UI thread)
-    if (g_tick % 62 == 0) {
-        if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d)); // viz at 2 Hz
+    if (g_tick % 12 == 0) {
+        if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d)); // viz at ~10 Hz
     }
     return 1; // keep source
 }
@@ -758,6 +762,12 @@ fn onFlipToggled(btn: [*c]c.GtkToggleButton, data: ?*anyopaque) callconv(.c) voi
     g_lock.lock();
     if (is_pitch) g_opts.p.flip_pitch = active else g_opts.p.flip_yaw = active;
     g_lock.unlock();
+}
+
+fn onRecenterClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    // Signal the stream thread; it re-settles and re-captures the yaw/roll
+    // reference at the current head pose (~1s hold, then centered).
+    g_recenter_request.store(true, .release);
 }
 
 fn onSaveClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
@@ -990,6 +1000,9 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_box_append(@ptrCast(flip_row), @ptrCast(flip_pitch));
     g_check_flip_pitch = @ptrCast(flip_pitch);
     _ = c.g_signal_connect_data(@ptrCast(flip_pitch), "toggled", @ptrCast(&onFlipToggled), @ptrFromInt(1), null, 0);
+    const btn_recenter = c.gtk_button_new_with_label("Recenter");
+    c.gtk_box_append(@ptrCast(flip_row), @ptrCast(btn_recenter));
+    _ = c.g_signal_connect_data(@ptrCast(btn_recenter), "clicked", @ptrCast(&onRecenterClicked), null, null, 0);
     c.gtk_box_append(@ptrCast(box), @ptrCast(flip_row));
 
     const hint = c.gtk_label_new(
