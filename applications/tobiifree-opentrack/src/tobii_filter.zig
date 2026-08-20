@@ -467,9 +467,6 @@ pub const TobiiPipeline = struct {
     settle_frames: u32 = 0,
     settle_sum: [3]f64 = .{ 0, 0, 0 },
     last_out: [6]f64 = .{ 0, 0, 0, 0, 0, 0 },
-    rest_time: f64 = 0,
-    last_yaw: f64 = 0,
-    last_pitch: f64 = 0,
     // Anti-latch state: a pre-occlusion glitch frame can spike the
     // interocular depth, and a subsequent n=1 frame would then latch that
     // spike forever (the one-eye fallback never gets within the reject
@@ -497,10 +494,6 @@ pub const TobiiPipeline = struct {
     fb_blend: f64 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
-    const rest_recenter_s: f64 = 1.2; // hold still near center → re-center
-    const rest_yaw_deg: f64 = 30.0; // only recenter when roughly facing center
-    const rest_pitch_deg: f64 = 20.0;
-    const rest_vel_deg_s: f64 = 3.0;
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
@@ -608,12 +601,19 @@ pub const TobiiPipeline = struct {
                     self.settle_yaw_sum = 0;
                     self.settle_roll_sum = 0;
                     self.settle_yaw_frames = 0;
-                } else if (self.had_ref) {
-                    return self.last_out; // hold the view during a re-settle
-                } else {
-                    return .{ 0, 0, 0, 0, 0, 0 }; // startup, no tracking yet
+                } else if (!self.had_ref) {
+                    // Startup: no reference yet — emit zeros until the first
+                    // settle completes (~1 s).
+                    return .{ 0, 0, 0, 0, 0, 0 };
                 }
+                // Re-settle (had_ref, manual recenter): fall through and keep
+                // tracking with the OLD refs. No freeze, no pop — the refs
+                // atomically swap when the new settle completes.
             }
+        } else {
+            // No valid eye at all (zero-vector shield caught both, or origins
+            // are gone). Hold the last full pose instead of snapping to 0.
+            return self.last_out;
         }
 
         // 1. gaze → angles, heavily filtered.
@@ -640,7 +640,7 @@ pub const TobiiPipeline = struct {
         var head_yaw: f64 = 0;
         var head_pitch: f64 = 0;
         var head_roll: f64 = 0;
-        if (has_origins and self.ref_set) {
+        if (has_origins and (self.ref_set or self.had_ref)) {
             const dy = center[1] - self.ref_mid[1];
             const neck_mm = p.neck * 10.0;
             const pitch_est = std.math.atan(dy / neck_mm) * 180.0 / std.math.pi;
@@ -662,9 +662,12 @@ pub const TobiiPipeline = struct {
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
-                } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
+                } else if (self.fb_blend < 0.3 and @abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
                     // Pre-occlusion hardware spike (impossible depth):
-                    // drop the frame, hold the last known good pose.
+                    // drop the frame, hold the last known good pose. Only
+                    // enforced in pure interocular mode — right after a
+                    // one-eye stretch the fallback's pose differs by design,
+                    // so the blend handles the handoff instead.
                     rel_yaw = self.last_good_yaw;
                 } else {
                     self.last_good_yaw = rel_yaw;
@@ -709,27 +712,9 @@ pub const TobiiPipeline = struct {
         const pitch = self.rot_pitch.update(raw_pitch, dt, mode, p.smoothing, 10.0);
         const roll = self.roll_s.update(head_roll, dt, mode, p.smoothing, 10.0);
 
-        // 3b. Auto-recenter: a bad ref would otherwise leave a constant
-        //     offset (e.g. -105°). If the head is roughly centered AND still
-        //     for a sustained stretch, re-assimilate the reference. Parking
-        //     to aim at a side view (large angle) never triggers this.
-        const dt_rest = @min(dt, 0.1);
-        const yaw_vel = @abs(yaw - self.last_yaw) / @max(dt_rest, 1e-6);
-        const pitch_vel = @abs(pitch - self.last_pitch) / @max(dt_rest, 1e-6);
-        if (@abs(yaw) < rest_yaw_deg and @abs(pitch) < rest_pitch_deg and
-            yaw_vel + pitch_vel < rest_vel_deg_s)
-        {
-            self.rest_time += dt_rest;
-        } else {
-            self.rest_time = 0;
-        }
-        self.last_yaw = yaw;
-        self.last_pitch = pitch;
-        if (self.rest_time >= rest_recenter_s) {
-            self.rest_time = 0;
-            self.reset();
-            return self.last_out;
-        }
+        // 3b. (no auto-recenter: a re-settle during play would freeze the view
+        //     for a full settle window and re-center mid-turn. Recentering is
+        //     user-initiated via the GUI Recenter button / startup settle only.)
         if (std.posix.getenv("TOBII_TRACE") != null) {
             var buf2: [96]u8 = undefined;
             const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {

@@ -59,7 +59,6 @@ var g_quit: std.atomic.Value(bool) = .init(false);
 var g_frame_count: u64 = 0;
 var g_eyes_valid: bool = false;
 var g_got_sample: bool = false;
-var g_invalid_frames: u32 = 0;
 
 // Gaze source + last output pose (read by the GUI tick).
 var g_socket: SocketSource = undefined;
@@ -337,19 +336,17 @@ fn onGaze(sample: *const core.GazeSample) void {
     g_eyes_valid = valid;
     g_got_sample = true;
     if (!valid) {
-        g_invalid_frames +|= 1;
         if (g_opts.verbose or g_opts.headless and g_frame_count <= 5) {
             log.warn("no eyes detected, holding last pose", .{});
         }
         return;
     }
     // Manual recenter (GUI button): re-settle so dead-center head → 0°/0°.
+    // The re-settle tracks through (no freeze) and only re-captures the ref
+    // after ~1s. NOTE: no automatic reset on sustained eye loss — a reset
+    // here would freeze the view for a full settle window right at the
+    // moment you're turning back from a corner.
     if (g_recenter_request.swap(false, .acq_rel)) g_pipeline.reset();
-    // Re-acquisition: after a sustained full eye loss the tracker re-locks on
-    // slightly different absolute origins, so re-center. Short losses
-    // (blinks) never trigger this. Delivery stalls keep eyes valid → no reset.
-    if (g_invalid_frames > 20) g_pipeline.reset();
-    g_invalid_frames = 0;
 
     // Frame-independent dt from the device clock, capped so a delivery gap
     // can't cause a snap (re-centering is handled by eye validity above).
