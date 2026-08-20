@@ -119,7 +119,7 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .deadzone = 0.2,       // micro-deadzone (blends into spline's native 2° flatline)
 
         // 4. Gain (do NOT pre-multiply head angle into the spline)
-        .head_gain = 1.0,
+        .head_gain = 2.0, // head turns reach the spline boost region
         .pos_gain = 1.2, // slight boost for leaning in the cockpit
         .pitch_gain = 1.5, // +50% pitch for testing (up/down is weak)
         .neck = 12.0,
@@ -338,7 +338,6 @@ pub const OneEuroFilter = struct {
     init: bool = false,
     fc: f64 = 0, // last computed cutoff (Hz), exposed for the trace
 
-    const beta: f64 = 0.5; // speed → cutoff scaling
     const fc_d: f64 = 1.0; // derivative low-pass cutoff (Hz)
 
     fn alpha(fc: f64, dt: f64) f64 {
@@ -346,8 +345,11 @@ pub const OneEuroFilter = struct {
         return 1.0 / (1.0 + tau / dt);
     }
 
-    /// `smoothing` (0..1) maps to the min cutoff: higher smoothing → lower
-    /// fc_min → heavier jitter suppression. fc_min = 6·(1−smoothing)+0.3 Hz.
+    /// `smoothing` (0..1) drives EVERYTHING: the rest-state cutoff floor
+    /// (`fc_min = 6·(1−s)+0.3`), the speed→cutoff scaling (`beta`), and a hard
+    /// motion cap (`fc_max`). Older builds had a fixed beta=0.5, so any motion
+    /// blew the cutoff up to tens of Hz and the slider only affected the
+    /// rest-state floor — that's why "max smoothing" felt identical to "low".
     pub fn update(self: *OneEuroFilter, value: f64, dt: f64, smoothing: f64) f64 {
         const dt_safe = @max(dt, 1e-6);
         if (!self.init) {
@@ -358,12 +360,15 @@ pub const OneEuroFilter = struct {
             self.fc = 0;
             return value;
         }
-        const fc_min = 6.0 * (1.0 - std.math.clamp(smoothing, 0.0, 1.0)) + 0.3;
+        const s = std.math.clamp(smoothing, 0.0, 1.0);
+        const fc_min = 6.0 * (1.0 - s) + 0.3;
+        const beta = 0.02 + 0.48 * (1.0 - s);
+        const fc_max = 1.0 + 30.0 * (1.0 - s);
         const dx = (value - self.x_prev) / dt_safe;
         self.x_prev = value;
         const a_d = alpha(fc_d, dt_safe);
         self.dx_hat += a_d * (dx - self.dx_hat);
-        const fc = fc_min + beta * @abs(self.dx_hat);
+        const fc = @min(fc_max, fc_min + beta * @abs(self.dx_hat));
         self.fc = fc;
         const a = alpha(fc, dt_safe);
         self.x_hat += a * (value - self.x_hat);
@@ -461,12 +466,19 @@ pub const TobiiPipeline = struct {
     pos_x: AdaptiveSmoother = .{},
     pos_y: AdaptiveSmoother = .{},
     pos_z: AdaptiveSmoother = .{},
-    ref_set: bool = false,
+ref_set: bool = false,
     had_ref: bool = false,
     ref_mid: [3]f64 = .{ 0, 0, 0 },
     settle_frames: u32 = 0,
     settle_sum: [3]f64 = .{ 0, 0, 0 },
     last_out: [6]f64 = .{ 0, 0, 0, 0, 0, 0 },
+    // Gentle auto-recenter: while the head sits near center AND still, slowly
+    // blend the reference toward the current pose so position/vertical/yaw
+    // offsets (seat drift, a stale startup settle) decay smoothly — no freeze
+    // and no pop, unlike the old hard reset.
+    rest_time: f64 = 0,
+    last_yaw: f64 = 0,
+    last_pitch: f64 = 0,
     // Anti-latch state: a pre-occlusion glitch frame can spike the
     // interocular depth, and a subsequent n=1 frame would then latch that
     // spike forever (the one-eye fallback never gets within the reject
@@ -492,9 +504,17 @@ pub const TobiiPipeline = struct {
     // position-based fallback (one eye, continuous). 0 = interocular,
     // 1 = head-center lateral angle. Ramped so occlusion transitions don't pop.
     fb_blend: f64 = 0,
+    // Debounce: how many consecutive rot_both frames must pass before easing
+    // back off the fallback. Prevents a one-eye flash from yanking the pose.
+    both_frames: u32 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
+    const rest_recenter_s: f64 = 1.5; // hold still near center → blend ref toward pose
+    const rest_yaw_deg: f64 = 30.0; // only recenter when roughly facing center
+    const rest_pitch_deg: f64 = 20.0;
+    const rest_vel_deg_s: f64 = 5.0;
+    const recenter_rate: f64 = 0.02; // ref blend per frame once at rest
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
     const zero_eps: f64 = 1e-3; // treat (x,z)≈(0,0) as a dropped eye
@@ -674,8 +694,13 @@ pub const TobiiPipeline = struct {
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                 }
-                // Both eyes again: ease off the position fallback.
-                self.fb_blend = @max(0.0, self.fb_blend - dt / crossfade_s);
+                // Both eyes again: only ease off the position fallback after
+                // the pair has been steady for a few frames, so a one-eye
+                // blink can't yank the pose toward center mid-turn.
+                self.both_frames +|= 1;
+                if (self.both_frames >= 6) {
+                    self.fb_blend = @max(0.0, self.fb_blend - dt / crossfade_s);
+                }
                 head_yaw = self.last_good_yaw * (1.0 - self.fb_blend) + pos_yaw * self.fb_blend;
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
@@ -684,6 +709,7 @@ pub const TobiiPipeline = struct {
                 // center's lateral angle (continuous, no freeze); roll can't be
                 // measured with one eye → holds; pitch stays live from center.
                 self.n1_timer += dt;
+                self.both_frames = 0;
                 if (!self.has_last_good) {
                     self.last_good_yaw = pos_yaw;
                     self.last_good_roll = 0;
@@ -712,9 +738,33 @@ pub const TobiiPipeline = struct {
         const pitch = self.rot_pitch.update(raw_pitch, dt, mode, p.smoothing, 10.0);
         const roll = self.roll_s.update(head_roll, dt, mode, p.smoothing, 10.0);
 
-        // 3b. (no auto-recenter: a re-settle during play would freeze the view
-        //     for a full settle window and re-center mid-turn. Recentering is
-        //     user-initiated via the GUI Recenter button / startup settle only.)
+        // 3b. Gentle auto-recenter: while the head sits near center AND still,
+        //     slowly blend the reference toward the current pose. This makes
+        //     seat drift / a stale startup settle decay smoothly over a couple
+        //     of seconds instead of holding a constant offset forever — and,
+        //     unlike the old hard reset, there is NO freeze and NO pop mid-turn.
+        const dt_rest = @min(dt, 0.1);
+        const yaw_vel = @abs(yaw - self.last_yaw) / @max(dt_rest, 1e-6);
+        const pitch_vel = @abs(pitch - self.last_pitch) / @max(dt_rest, 1e-6);
+        if (@abs(yaw) < rest_yaw_deg and @abs(pitch) < rest_pitch_deg and
+            yaw_vel + pitch_vel < rest_vel_deg_s)
+        {
+            self.rest_time += dt_rest;
+        } else {
+            self.rest_time = 0;
+        }
+        self.last_yaw = yaw;
+        self.last_pitch = pitch;
+        if (self.rest_time >= rest_recenter_s and has_origins) {
+            // Blend ref_mid toward the current center, and the yaw/roll refs
+            // toward the current interocular pose, at a slow per-frame rate.
+            const r = recenter_rate * dt / 0.0111;
+            for (0..3) |i| self.ref_mid[i] += r * (center[i] - self.ref_mid[i]);
+            if (rot_both) {
+                self.yaw_ref += r * (inter_yaw - self.yaw_ref);
+                self.roll_ref += r * (inter_roll - self.roll_ref);
+            }
+        }
         if (std.posix.getenv("TOBII_TRACE") != null) {
             var buf2: [96]u8 = undefined;
             const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {
