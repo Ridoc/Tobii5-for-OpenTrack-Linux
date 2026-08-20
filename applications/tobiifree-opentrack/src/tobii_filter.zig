@@ -514,9 +514,6 @@ ref_set: bool = false,
     // position-based fallback (one eye, continuous). 0 = interocular,
     // 1 = head-center lateral angle. Ramped so occlusion transitions don't pop.
     fb_blend: f64 = 0,
-    // Debounce: how many consecutive rot_both frames must pass before easing
-    // back off the fallback. Prevents a one-eye flash from yanking the pose.
-    both_frames: u32 = 0,
     // Smoothed center-x used for the position-yaw fallback. A tracker eye-swap
     // (which single eye it reports) can move the IPD-compensated center by a
     // full IPD in one frame; without low-passing, that reads as a ~5° yaw pop.
@@ -538,7 +535,6 @@ ref_set: bool = false,
     const glitch_deg: f64 = 10.0; // max genuine interocular yaw change per frame
     const n1_hold_s: f64 = 0.5; // hold through n=1 (blinks/glances) this long
     const unstick_rate: f64 = 2.0; // lerp rate toward the fallback once stuck
-    const crossfade_s: f64 = 0.2; // ramp occlusion yaw fallback in/out
 
     /// Full reset (fresh acquisition / long reacquisition). Keeps `had_ref`
     /// and `last_out` so the view holds instead of zeroing during a re-settle.
@@ -710,6 +706,9 @@ ref_set: bool = false,
                 @max(self.fb_cz, 50.0),
             ) * 180.0 / std.math.pi;
             if (rot_both) {
+                // Interocular yaw/roll is authoritative whenever BOTH eyes are
+                // valid. Use it directly (no fallback blend) so a fast turn
+                // can't be fought by the position fallback mid-sweep.
                 self.n1_timer = 0;
                 var rel_yaw = inter_yaw - self.yaw_ref;
                 const rel_roll = inter_roll - self.roll_ref;
@@ -718,26 +717,17 @@ ref_set: bool = false,
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
-                } else if (self.fb_blend < 0.3 and @abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
+                } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg) {
                     // Pre-occlusion hardware spike (impossible depth):
-                    // drop the frame, hold the last known good pose. Only
-                    // enforced in pure interocular mode — right after a
-                    // one-eye stretch the fallback's pose differs by design,
-                    // so the blend handles the handoff instead.
+                    // drop the frame, hold the last known good pose.
                     rel_yaw = self.last_good_yaw;
                 } else {
                     self.last_good_yaw = rel_yaw;
                     self.last_good_roll = rel_roll;
                     self.last_good_pitch = pitch_est;
                 }
-                // Both eyes again: only ease off the position fallback after
-                // the pair has been steady for a few frames, so a one-eye
-                // blink can't yank the pose toward center mid-turn.
-                self.both_frames +|= 1;
-                if (self.both_frames >= 6) {
-                    self.fb_blend = @max(0.0, self.fb_blend - dt / crossfade_s);
-                }
-                head_yaw = self.last_good_yaw * (1.0 - self.fb_blend) + pos_yaw * self.fb_blend;
+                self.fb_blend = 0.0; // interocular owns the pose now
+                head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
             } else {
@@ -745,15 +735,14 @@ ref_set: bool = false,
                 // center's lateral angle (continuous, no freeze); roll can't be
                 // measured with one eye → holds; pitch stays live from center.
                 self.n1_timer += dt;
-                self.both_frames = 0;
                 if (!self.has_last_good) {
                     self.last_good_yaw = pos_yaw;
                     self.last_good_roll = 0;
                     self.last_good_pitch = pitch_est;
                     self.has_last_good = true;
                 }
-                self.fb_blend = @min(1.0, self.fb_blend + dt / crossfade_s);
-                head_yaw = self.last_good_yaw * (1.0 - self.fb_blend) + pos_yaw * self.fb_blend;
+                self.fb_blend = 1.0; // full fallback while one eye only
+                head_yaw = pos_yaw;
                 self.last_good_yaw = head_yaw; // keep the clamp baseline current
                 head_roll = self.last_good_roll;
                 head_pitch = pitch_est;
@@ -818,22 +807,8 @@ ref_set: bool = false,
                 self.roll_ref += r * (inter_roll - self.roll_ref);
             }
         }
-        if (std.posix.getenv("TOBII_TRACE") != null) {
-            var buf2: [96]u8 = undefined;
-            const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {
-                const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
-                const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
-                const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
-                break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
-            } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
-                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both,
-                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, self.fb_blend, gate, n, self.n1_timer, self.last_good_yaw,
-                self.rot_yaw.cutoff(), smoothModeName(mode),
-            });
-        }
-
-        // 4. response curve + cap + deadzone.
+        // 4. response curve + cap + deadzone. (Computed here so the trace can
+        //    report the true output fy/fp going to X4.)
         const fy = deadzone(applyCurve(
             @enumFromInt(p.curve_mode),
             yaw,
@@ -848,6 +823,21 @@ ref_set: bool = false,
             p.curve_exp,
             true,
         ), p.deadzone);
+
+        if (std.posix.getenv("TOBII_TRACE") != null) {
+            var buf2: [96]u8 = undefined;
+            const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {
+                const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
+                const ey = sample.eye_origin_R_mm[1] - sample.eye_origin_L_mm[1];
+                const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
+                break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
+            } else "";
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} mode={s}\n", .{
+                head_yaw, gaze_yaw, raw_yaw, head_pitch, gaze_pitch, raw_pitch, yaw, pitch, both, fy, fp,
+                center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, self.fb_blend, gate, n, self.n1_timer, self.last_good_yaw,
+                self.rot_yaw.cutoff(), smoothModeName(mode),
+            });
+        }
 
         // 5. translation (ref-relative mm → cm) with heavier smoothing.
         //    Same anti-latch as rotation: the raw n=1 center differs by half-IPD
