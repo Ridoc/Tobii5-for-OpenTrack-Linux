@@ -94,6 +94,23 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Display area config (shared EDID + config loading).
+    const display_area_config = b.createModule(.{
+        .root_source_file = b.path("../../driver/src/display_area_config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Calibration wizard state machine.
+    const calibration = b.createModule(.{
+        .root_source_file = b.path("src/calibration.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "daemon_protocol", .module = daemon_protocol },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "tobiifree-opentrack",
         .root_module = b.createModule(.{
@@ -105,6 +122,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "daemon_protocol", .module = daemon_protocol },
                 .{ .name = "socket_source", .module = socket_source },
                 .{ .name = "tobii_filter", .module = tobii_filter },
+                .{ .name = "display_area_config", .module = display_area_config },
+                .{ .name = "calibration", .module = calibration },
             },
         }),
     });

@@ -13,6 +13,7 @@ const log = std.log.scoped(.socket);
 pub const SocketSource = struct {
     fd: std.posix.fd_t,
     gaze_cb: ?gs.GazeFn,
+    response_cb: ?*const fn (cmd_type: u8, payload: []const u8) void,
     // Read buffer: accumulates partial messages.
     buf: [8192]u8,
     buf_len: usize,
@@ -60,6 +61,7 @@ pub const SocketSource = struct {
         return .{
             .fd = fd,
             .gaze_cb = null,
+            .response_cb = null,
             .buf = undefined,
             .buf_len = 0,
         };
@@ -71,6 +73,23 @@ pub const SocketSource = struct {
 
     pub fn onGaze(self: *SocketSource, cb: gs.GazeFn) void {
         self.gaze_cb = cb;
+    }
+
+    pub fn onResponse(self: *SocketSource, cb: *const fn (cmd_type: u8, payload: []const u8) void) void {
+        self.response_cb = cb;
+    }
+
+    pub fn sendCommand(self: *SocketSource, cmd: proto.Cmd, payload: []const u8) void {
+        // Buffer must hold the largest payload (calibration blob ≤ 8 KiB).
+        var cmd_buf: [proto.HEADER_SIZE + 8192]u8 = undefined;
+        if (payload.len > cmd_buf.len - proto.HEADER_SIZE) {
+            log.err("command 0x{x:0>2} payload too large ({d} B), dropped", .{ @intFromEnum(cmd), payload.len });
+            return;
+        }
+        const n = proto.encodeCmd(&cmd_buf, cmd, payload);
+        _ = std.posix.write(self.fd, cmd_buf[0..n]) catch |e| {
+            log.warn("command 0x{x:0>2} write failed: {}", .{ @intFromEnum(cmd), e });
+        };
     }
 
     pub fn poll(self: *SocketSource) void {
@@ -117,14 +136,18 @@ pub const SocketSource = struct {
         if (msg_type == @intFromEnum(proto.Srv.gaze)) {
             if (payload.len >= @sizeOf(proto.GazeSample)) {
                 if (self.gaze_cb) |cb| {
-                    // Copy into aligned local — payload slice from read buffer has no alignment guarantee.
                     var sample: proto.GazeSample = undefined;
                     @memcpy(std.mem.asBytes(&sample), payload[0..@sizeOf(proto.GazeSample)]);
                     cb(&sample);
                 }
             }
+        } else if (msg_type == @intFromEnum(proto.Srv.response)) {
+            if (payload.len >= 1) {
+                if (self.response_cb) |cb| {
+                    cb(payload[0], payload[1..]);
+                }
+            }
         }
-        // Future: handle response, display_area, error messages.
     }
 
     pub fn deinit(self: *SocketSource) void {

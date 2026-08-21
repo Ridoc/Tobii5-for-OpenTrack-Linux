@@ -21,6 +21,8 @@ const core = @import("tobiifree_core");
 const proto = @import("daemon_protocol");
 const SocketSource = @import("socket_source").SocketSource;
 const tobii = @import("tobii_filter");
+const calibration = @import("calibration");
+const da_config = @import("display_area_config");
 
 const log = std.log.scoped(.opentrack);
 
@@ -132,6 +134,19 @@ var g_saveas_entry: ?*c.GtkEntry = null;
 
 var g_srcbuf: [192]u8 = undefined;
 var g_tick: u32 = 0;
+
+// Calibration wizard state.
+var g_calibrator: calibration.Calibrator = .{};
+var g_cal_window: ?*c.GtkWindow = null;
+var g_cal_da: ?*c.GtkDrawingArea = null;
+var g_cal_socket: ?*SocketSource = null;
+// g_calibrator is touched from the stream thread (samples) and the UI thread
+// (keys/draw) — serialize all access.
+var g_cal_mutex: std.Thread.Mutex = .{};
+// Calibration blob returned by the daemon's finish_calibration reply, applied
+// via a follow-up cal_apply command.
+var g_cal_blob: [8192]u8 = undefined;
+var g_cal_blob_len: usize = 0;
 // UI → stream-thread request to re-settle the reference (recenters yaw/roll).
 var g_recenter_request: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
@@ -332,6 +347,11 @@ fn sendPacket(v: [6]f64) void {
 
 fn onGaze(sample: *const core.GazeSample) void {
     g_frame_count += 1;
+
+    // Calibration wizard receives ALL samples (even eye-loss frames): at
+    // extreme corners both eyes can leave tracked FOV, and capture would
+    // otherwise freeze forever waiting for samples that never come.
+    calFeedGaze(sample);
 
     // 0 = valid, 4 = not detected. Proceed if at least one eye is tracked.
     const valid = sample.validity_L == 0 or sample.validity_R == 0;
@@ -667,6 +687,8 @@ fn onTick(_: ?*anyopaque) callconv(.c) c_int {
     if (g_tick % 125 == 0) updateLabels(); // numbers at 1 Hz (UI thread)
     if (g_tick % 12 == 0) {
         if (g_draw) |d| c.gtk_widget_queue_draw(@ptrCast(d)); // viz at ~10 Hz
+        // Calibration window repaints (stream thread never touches GTK).
+        if (g_cal_da) |da| c.gtk_widget_queue_draw(@ptrCast(da));
     }
     return 1; // keep source
 }
@@ -769,9 +791,351 @@ fn onFlipToggled(btn: [*c]c.GtkToggleButton, data: ?*anyopaque) callconv(.c) voi
 }
 
 fn onRecenterClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
-    // Signal the stream thread; it re-settles and re-captures the yaw/roll
-    // reference at the current head pose (~1s hold, then centered).
     g_recenter_request.store(true, .release);
+}
+
+// ─── Calibration wizard ──────────────────────────────────────────────
+
+fn onCalibrateClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    if (g_cal_window != null) return; // already open
+    g_calibrator.start();
+    openCalWindow();
+    log.info("calibration wizard started", .{});
+}
+
+fn openCalWindow() void {
+    const win = c.gtk_window_new();
+    g_cal_window = @ptrCast(win);
+    c.gtk_window_set_title(@ptrCast(win), "Calibration");
+    c.gtk_window_set_default_size(@ptrCast(win), 1920, 1080);
+    c.gtk_window_fullscreen(@ptrCast(win));
+
+    const da = c.gtk_drawing_area_new();
+    g_cal_da = @ptrCast(da);
+    c.gtk_drawing_area_set_draw_func(@ptrCast(da), @ptrCast(&calDrawFunc), null, null);
+    c.gtk_widget_set_vexpand(@ptrCast(da), 1);
+    c.gtk_widget_set_hexpand(@ptrCast(da), 1);
+    c.gtk_window_set_child(@ptrCast(win), @ptrCast(da));
+
+    // Key event controller must live on the TOPLEVEL WINDOW: a GtkDrawingArea
+    // is not focusable by default, so it would never receive key events.
+    const key_ctrl = c.gtk_event_controller_key_new();
+    _ = c.g_signal_connect_data(@ptrCast(key_ctrl), "key-pressed", @ptrCast(&calKeyPressed), null, null, 0);
+    c.gtk_widget_add_controller(@ptrCast(win), @ptrCast(key_ctrl));
+
+    c.gtk_window_present(@ptrCast(win));
+}
+
+fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c_int, _: ?*anyopaque) callconv(.c) void {
+    _ = da;
+    // Snapshot wizard state under the lock (stream thread mutates it).
+    g_cal_mutex.lock();
+    const st = g_calibrator.state;
+    const prog = g_calibrator.progress();
+    const cap_n = g_calibrator.sample_count;
+    const cur_pt = g_calibrator.current_point + 1;
+    const retries = g_calibrator.retries;
+    const pt = g_calibrator.currentPoint();
+    g_cal_mutex.unlock();
+
+    // Dark background.
+    c.cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+    c.cairo_paint(cr);
+
+    const dot_r: f64 = 12;
+
+    // Map normalized [0,1] to pixel coords.
+    const px = pt.x * @as(f64, @floatFromInt(width));
+    const py = pt.y * @as(f64, @floatFromInt(height));
+
+    // White dot.
+    c.cairo_set_source_rgb(cr, 1, 1, 1);
+    c.cairo_arc(cr, px, py, dot_r, 0, 2.0 * 3.14159265);
+    c.cairo_fill(cr);
+
+    // Progress bar at bottom.
+    const bar_h: f64 = 4;
+    const w_f = @as(f64, @floatFromInt(width));
+    const h_f = @as(f64, @floatFromInt(height));
+    c.cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
+    c.cairo_rectangle(cr, 0, h_f - bar_h, w_f, bar_h);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.2, 0.8, 0.4);
+    c.cairo_rectangle(cr, 0, h_f - bar_h, w_f * prog, bar_h);
+    c.cairo_fill(cr);
+
+    // Instruction BELOW the dot — bold yellow, centered, high contrast.
+    var status_buf: [96]u8 = undefined;
+    // Point counter in the top-left corner.
+    if (std.fmt.bufPrint(&status_buf, "Point {d}/{}", .{ cur_pt, calibration.NUM_CAL_POINTS })) |ptext| {
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 16);
+        c.cairo_move_to(cr, 16, 30);
+        c.cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
+        calShowText(cr, ptext);
+    } else |_| {}
+    // "press SPACE" centered directly below the dot.
+    if (st == .showing_point) {
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 26);
+        var ext: c.cairo_text_extents_t = undefined;
+        calMeasureText(cr, "press SPACE", &ext);
+        c.cairo_move_to(cr, (w_f - ext.width) / 2.0, py + 60);
+        c.cairo_set_source_rgb(cr, 1.0, 0.85, 0.1); // bright yellow on dark bg
+        calShowText(cr, "press SPACE");
+    }
+    // Capturing counter above the dot in green.
+    if (st == .capturing) {
+        var cap_buf: [48]u8 = undefined;
+        if (std.fmt.bufPrint(&cap_buf, "Capturing: {d}/{}", .{
+            cap_n, calibration.SAMPLES_PER_POINT,
+        })) |cap| {
+            c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+            c.cairo_set_font_size(cr, 20);
+            var ext2: c.cairo_text_extents_t = undefined;
+            calMeasureText(cr, cap, &ext2);
+            c.cairo_move_to(cr, (w_f - ext2.width) / 2.0, py - 40);
+            c.cairo_set_source_rgb(cr, 0.2, 1.0, 0.4);
+            calShowText(cr, cap);
+        } else |_| {}
+    }
+
+    // Retry hint after a weak/eye-loss capture.
+    if (st == .showing_point and retries > 0) {
+        var retry_buf: [96]u8 = undefined;
+        if (std.fmt.bufPrint(&retry_buf, "Eyes lost - sit back a little, SPACE to retry ({d}/{d})", .{
+            retries + 1, calibration.MAX_POINT_RETRIES,
+        })) |hint| {
+            c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+            c.cairo_set_font_size(cr, 20);
+            var ext: c.cairo_text_extents_t = undefined;
+            calMeasureText(cr, hint, &ext);
+            c.cairo_move_to(cr, (w_f - ext.width) / 2.0, h_f / 2.0 + 90);
+            c.cairo_set_source_rgb(cr, 1.0, 0.35, 0.25); // red-orange alert
+            calShowText(cr, hint);
+        } else |_| {}
+    }
+
+    // Abort message — shown for 3 seconds before the window closes.
+    if (st == .error_state) {
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 28);
+        var ext: c.cairo_text_extents_t = undefined;
+        calMeasureText(cr, "Calibration aborted", &ext);
+        c.cairo_move_to(cr, (w_f - ext.width) / 2.0, h_f / 2.0 - 20);
+        c.cairo_set_source_rgb(cr, 1.0, 0.2, 0.2); // bright red
+        calShowText(cr, "Calibration aborted");
+
+        c.cairo_set_font_size(cr, 18);
+        calMeasureText(cr, "Failed to capture enough eye data at this corner.", &ext);
+        c.cairo_move_to(cr, (w_f - ext.width) / 2.0, h_f / 2.0 + 30);
+        c.cairo_set_source_rgb(cr, 0.9, 0.5, 0.5);
+        calShowText(cr, "Failed to capture enough eye data at this corner.");
+
+        calMeasureText(cr, "Move head closer to center, then try again.", &ext);
+        c.cairo_move_to(cr, (w_f - ext.width) / 2.0, h_f / 2.0 + 60);
+        calShowText(cr, "Move head closer to center, then try again.");
+    }
+
+    // Waiting for the daemon's calibration blob reply.
+    if (st == .waiting_response or st == .done) {
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 24);
+        var ext: c.cairo_text_extents_t = undefined;
+        calMeasureText(cr, "Applying calibration...", &ext);
+        c.cairo_move_to(cr, (w_f - ext.width) / 2.0, h_f / 2.0 + 90);
+        c.cairo_set_source_rgb(cr, 1, 1, 1);
+        calShowText(cr, "Applying calibration...");
+    }
+
+    // Small cancel hint, bottom-left.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+    c.cairo_set_font_size(cr, 13);
+    c.cairo_move_to(cr, 16, h_f - 16);
+    c.cairo_set_source_rgb(cr, 0.55, 0.55, 0.55);
+    calShowText(cr, "ESC = cancel");
+}
+
+/// Draw a Zig slice via cairo_show_text by copying into a NUL-terminated
+/// scratch buffer (bufPrint results are not NUL-terminated; cairo needs C strings).
+var g_cairo_text_scratch: [256]u8 = undefined;
+fn calShowText(cr: *c.cairo_t, s: []const u8) void {
+    if (s.len >= g_cairo_text_scratch.len) return;
+    @memcpy(g_cairo_text_scratch[0..s.len], s);
+    g_cairo_text_scratch[s.len] = 0;
+    c.cairo_show_text(cr, @ptrCast(g_cairo_text_scratch[0..s.len :0].ptr));
+}
+
+/// Measure text extents with a NUL-terminated copy.
+fn calMeasureText(cr: *c.cairo_t, s: []const u8, ext: *c.cairo_text_extents_t) void {
+    ext.* = std.mem.zeroes(c.cairo_text_extents_t);
+    if (s.len >= g_cairo_text_scratch.len) return;
+    @memcpy(g_cairo_text_scratch[0..s.len], s);
+    g_cairo_text_scratch[s.len] = 0;
+    c.cairo_text_extents(cr, @ptrCast(g_cairo_text_scratch[0..s.len :0].ptr), ext);
+}
+
+fn closeCalWindow() void {
+    if (g_cal_window) |w| {
+        c.gtk_window_destroy(@ptrCast(w));
+        g_cal_window = null;
+        g_cal_da = null;
+    }
+}
+
+/// Marshal window teardown onto the GTK main loop — GTK4 objects must only be
+/// touched from the main thread, and this runs via g_idle_add from any thread.
+fn idleCloseCalWindow(_: ?*anyopaque) callconv(.c) c_int {
+    g_cal_mutex.lock();
+    g_calibrator.state = .idle;
+    g_cal_mutex.unlock();
+    closeCalWindow();
+    return 0; // one-shot: remove source
+}
+
+/// Safety net: if the daemon's finish_calibration reply never arrives,
+/// stop waiting and close the wizard (display-area JSON was already saved).
+fn calWaitTimeout(_: ?*anyopaque) callconv(.c) c_int {
+    g_cal_mutex.lock();
+    const waiting = g_calibrator.state == .waiting_response;
+    if (waiting) g_calibrator.state = .idle;
+    g_cal_mutex.unlock();
+    if (waiting) {
+        log.warn("no calibration blob reply from daemon — display area saved, device cal skipped", .{});
+        _ = idleCloseCalWindow(null);
+    }
+    return 0; // one-shot: remove source
+}
+
+/// After a failed calibration run, show the abort message for a few seconds
+/// then close the window so the user can read it.
+fn calAbortTimeout(_: ?*anyopaque) callconv(.c) c_int {
+    g_cal_mutex.lock();
+    g_calibrator.state = .idle;
+    g_cal_mutex.unlock();
+    closeCalWindow();
+    return 0; // one-shot: remove source
+}
+
+fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_uint, _: ?*anyopaque) callconv(.c) c_int {
+    const GDK_KEY_space: c_uint = 0x020; // XK_space
+    const GDK_KEY_Escape: c_uint = 0xff1b;
+
+    if (keyval == GDK_KEY_Escape) {
+        g_cal_mutex.lock();
+        g_calibrator.cancel();
+        g_cal_mutex.unlock();
+        closeCalWindow(); // already on the GTK main thread here
+        return 1; // handled
+    }
+
+    if (keyval == GDK_KEY_space) {
+        g_cal_mutex.lock();
+        defer g_cal_mutex.unlock();
+        if (g_calibrator.state == .showing_point) {
+            g_calibrator.beginCapture();
+            if (g_cal_da) |da| c.gtk_widget_queue_draw(@ptrCast(da)); // main thread OK
+            return 1;
+        }
+    }
+
+    return 0; // not handled
+}
+
+/// Stream-thread side: feed samples into the wizard. Never touches GTK here —
+/// redraws are driven by onTick on the main thread.
+fn calFeedGaze(sample: *const proto.GazeSample) void {
+    g_cal_mutex.lock();
+    const done = g_calibrator.feedSample(sample);
+    var outcome: ?calibration.Calibrator.PointOutcome = null;
+    if (done) outcome = g_calibrator.finalizePoint();
+    g_cal_mutex.unlock();
+
+    switch (outcome orelse return) {
+        .next_point => {},
+        .retry => {}, // same dot stays up; hint drawn from state snapshot
+        .finished => sendCalibrationToDaemon(), // socket + file IO only
+        .failed => {
+            // Show the abort message for 3 seconds before closing.
+            _ = c.g_timeout_add(3000, @ptrCast(&calAbortTimeout), null);
+        },
+    }
+}
+
+/// Stream-thread side: runs once all points are captured. Sends the device
+/// calibration sequence, persists the display-area geometry, then waits for
+/// the daemon's finish_calibration blob reply (see onDaemonResponse).
+fn sendCalibrationToDaemon() void {
+    g_cal_mutex.lock();
+    g_calibrator.state = .waiting_response;
+    var results: [calibration.NUM_CAL_POINTS][2]f64 = undefined;
+    for (0..calibration.NUM_CAL_POINTS) |i| results[i] = g_calibrator.result_gaze[i];
+    const da = blk: {
+        const edid = da_config.detectEdid();
+        break :blk g_calibrator.computeDisplayArea(
+            if (edid) |e| e.width_mm else 800,
+            if (edid) |e| e.height_mm else 330,
+        );
+    };
+    g_cal_mutex.unlock();
+
+    const sock = g_cal_socket orelse {
+        log.err("no daemon connection — cannot run device-side calibration", .{});
+        _ = c.g_idle_add(@ptrCast(&idleCloseCalWindow), null);
+        return;
+    };
+
+    // Device-side sequence. add_calibration_point takes two f64s (x, y) per
+    // point — see tobiifreed buildRequest().
+    sock.sendCommand(.start_calibration, &.{});
+    for (results) |r| {
+        var pt_payload: [16]u8 = undefined;
+        std.mem.bytesAsValue(f64, pt_payload[0..8]).* = r[0];
+        std.mem.bytesAsValue(f64, pt_payload[8..16]).* = r[1];
+        sock.sendCommand(.add_calibration_point, &pt_payload);
+    }
+    sock.sendCommand(.finish_calibration, &.{});
+
+    log.info("calibration result: {d:.0}x{d:.0}mm z={d:.1} tilt={d:.1}°", .{
+        da.w_mm, da.h_mm, da.z_mm, da.tilt_deg,
+    });
+    da_config.saveToFile(da.w_mm, da.h_mm, da.ox_mm, da.oy_mm, da.z_mm, da.tilt_deg) catch |e| {
+        log.err("failed to save calibration config: {}", .{e});
+    };
+
+    // Window stays open ("Applying…") until the blob reply arrives; if it
+    // never does, calWaitTimeout closes after 4 s.
+    _ = c.g_timeout_add(4000, @ptrCast(&calWaitTimeout), null);
+}
+
+/// Stream-thread side (called during socket poll): daemon replied to our
+/// finish_calibration — stash the blob, send it back as cal_apply, close.
+fn onDaemonResponse(cmd_type: u8, payload: []const u8) void {
+    if (cmd_type != @intFromEnum(proto.Cmd.finish_calibration)) return;
+
+    g_cal_mutex.lock();
+    const waiting = g_calibrator.state == .waiting_response;
+    if (waiting) {
+        if (payload.len > 0 and payload.len <= g_cal_blob.len) {
+            @memcpy(g_cal_blob[0..payload.len], payload);
+            g_cal_blob_len = payload.len;
+            g_calibrator.state = .done;
+        } else {
+            g_cal_blob_len = 0;
+            g_calibrator.state = .error_state;
+        }
+    }
+    g_cal_mutex.unlock();
+
+    if (!waiting) return;
+
+    if (g_cal_blob_len > 0) {
+        if (g_cal_socket) |sock| sock.sendCommand(.cal_apply, g_cal_blob[0..g_cal_blob_len]);
+        log.info("device calibration applied ({d} B blob)", .{g_cal_blob_len});
+    } else {
+        log.err("daemon returned empty calibration blob — skipping cal_apply", .{});
+    }
+    _ = c.g_idle_add(@ptrCast(&idleCloseCalWindow), null);
 }
 
 fn onSaveClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
@@ -1007,6 +1371,9 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     const btn_recenter = c.gtk_button_new_with_label("Recenter");
     c.gtk_box_append(@ptrCast(flip_row), @ptrCast(btn_recenter));
     _ = c.g_signal_connect_data(@ptrCast(btn_recenter), "clicked", @ptrCast(&onRecenterClicked), null, null, 0);
+    const btn_calibrate = c.gtk_button_new_with_label("Calibrate");
+    c.gtk_box_append(@ptrCast(flip_row), @ptrCast(btn_calibrate));
+    _ = c.g_signal_connect_data(@ptrCast(btn_calibrate), "clicked", @ptrCast(&onCalibrateClicked), null, null, 0);
     c.gtk_box_append(@ptrCast(box), @ptrCast(flip_row));
 
     const hint = c.gtk_label_new(
@@ -1284,6 +1651,8 @@ pub fn main() void {
     defer g_socket.deinit();
 
     g_socket.onGaze(onGaze);
+    g_socket.onResponse(onDaemonResponse); // calibration blob replies
+    g_cal_socket = &g_socket; // expose socket for calibration wizard
     installSignalHandlers();
 
     log.info("streaming gaze → udp {s}:{d}  (preset {s})", .{ g_opts.host, g_opts.port, g_opts.p.name });

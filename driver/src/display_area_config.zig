@@ -152,6 +152,37 @@ pub fn toTrackerDisplayArea(cfg: DisplayAreaConfig, comptime DA: type) DA {
     };
 }
 
+/// Save display area config to ~/.config/tobii.json.
+pub fn saveToFile(w_mm: f64, h_mm: f64, ox_mm: f64, oy_mm: f64, z_mm: f64, tilt_deg: f64) !void {
+    const home = std.posix.getenv("HOME") orelse return error.NoHome;
+    const path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/.config/tobii.json", .{home});
+    defer std.heap.page_allocator.free(path);
+
+    // Ensure directory exists (~/.config normally exists already).
+    const dir_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/.config", .{home});
+    defer std.heap.page_allocator.free(dir_path);
+    std.fs.makeDirAbsolute(dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => return e,
+    };
+
+    const cfg = DisplayAreaConfig{
+        .w_mm = w_mm,
+        .h_mm = h_mm,
+        .ox_mm = ox_mm,
+        .oy_mm = oy_mm,
+        .z_mm = z_mm,
+        .tilt_deg = tilt_deg,
+    };
+
+    var json_buf: [1024]u8 = undefined;
+    const json_str = toJsonString(cfg, &json_buf) orelse return error.JsonFormat;
+
+    const file = try std.fs.createFileAbsolute(path, .{});
+    defer file.close();
+    try file.writeAll(json_str);
+}
+
 // ── JSON helpers ─────────────────────────────────────────────────────
 
 fn getFloat(obj: std.json.ObjectMap, key: []const u8) ?f64 {
