@@ -1,0 +1,31 @@
+# architecture.yaml — system architecture snapshot
+UPDATED: "2026-08-21"
+STATUS: "MATCHES_IMPLEMENTATION"
+
+PIPELINE:
+  - "Tobii ET5 (USB, udev assets/99-tobii.rules)"
+  - "tobiifreedot daemon (applications/tobiifreed; owns USB + Tracker TTP + calibration; unix socket $XDG_RUNTIME_DIR/tobiifreedot/gaze.sock; optional WebSocket --ws)"
+  - "tobiifree-opentrack bridge (applications/tobiifree-opentrack; GTK4 GUI; streams UDP 127.0.0.1:4242)"
+  - "any OpenTrack/FreeTrack-capable game (primary: X4: Foundations native Linux)"
+
+KEY_DESIGN:
+  - "SocketSource (Zig) speaks daemon protocol; daemon owns Tracker + TTP handshake (hello -> realm -> display area -> subscribe)."
+  - "Bridge has no libusb code path at runtime; it is a pure daemon client."
+  - "OpenTrack wire: 48 B packet = 6 little-endian doubles X,Y,Z,Yaw,Pitch,Roll; cm + degrees."
+
+MODULE_GRAPH (bridge build.zig):
+  - "tobiifree_core <- tracker <- libusb_transport (transitive only)"
+  - "daemon_protocol -> socket_source -> gaze_source"
+  - "tobii_filter (pipeline) imports tobiifree_core"
+  - "display_area_config (EDID + json config)"
+  - "calibration (wizard state machine) imports daemon_protocol"
+  - "executable links libusb-1.0 + gtk4 + libc"
+
+CONSUMERS:
+  - tobiifree-opentrack: "primary OpenTrack bridge"
+  - tobiifree-overlay: "overlay demo (--direct has Tracker, --socket uses daemon)"
+  - tobiifree-demo: "browser demo (TS SDK, WebSocket)"
+  - sdk/: "TypeScript Source API (subscribeToGaze, setDisplayArea, calAddPoint, calComputeAndApply, calRetrieve, calApply)"
+
+STATUS_NOTES:
+  - "ARCHITECTURE.md lists open refactor items (TS Tracker -> Source interface, WsSource, SocketSource full protocol)."

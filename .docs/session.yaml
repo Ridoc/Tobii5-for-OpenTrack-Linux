@@ -1,0 +1,21 @@
+# session.yaml — current session state (last-known)
+UPDATED: "2026-08-21"
+SESSION_ID: "tobii-x4-docs"
+WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-reviewer -> librarian; skills read_skeleton + test-scrubber.sh"
+
+GOALS:
+  - completed: "v0.1.1 shipped (EDID auto-detect, pre-curve deadzone, adaptive eye ratio)"
+  - active: "docs tree + documentation for existing repo (this session)"
+  - pending: "v0.2.0 calibration-wizard release (re-test -> QA -> commit/tag/push -> GitHub release)"
+
+RUNTIME_STATE:
+  bridge: "/tmp/zig-out-opentrack-gui22/bin/tobii-opentrack --port 4242 --verbose, connected, streaming UDP 4242"
+  daemon: "PID 13974, --force-display-area, user-started this session"
+  logs: "/tmp/gui-trace-testing.log (bridge trace), /tmp/tobifreedot.log (daemon)"
+
+NEXT_STEPS:
+  1. "Wizard re-test with retry-fix binary (pending user confirmation)"
+  2. "qa-tester gate: zig build test"
+  3. "librarian: commit v0.2.0, tag, push"
+  4. "gh release create v0.2.0"
+  5. "Keep .docs/tech-debt.yaml items updated through the release"

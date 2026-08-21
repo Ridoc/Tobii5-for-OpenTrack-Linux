@@ -1,0 +1,42 @@
+# protocol.yaml — wire protocols (daemon IPC + OpenTrack UDP)
+UPDATED: "2026-08-21"
+STATUS: "MATCHES_IMPLEMENTATION"
+
+DAEMON_FRAMING:
+  LAYOUT: "[u8 msg_type][u32 LE payload_len][payload...]"
+  MAX_PAYLOAD: "calibration blob <= 8192 B; SocketSource sendCommand buffer = HEADER_SIZE + 8192"
+
+CMD (client -> daemon):
+  subscribe: "0x01, payload 4 B LE u32 0x500 (STREAM_GAZE)"
+  get_display_area: "0x02"
+  set_display_area: "0x03, 5xf64 (w,h,ox,oy,z)"
+  set_display_area_corners: "0x04, 9xf64 (tl,tr,bl)"
+  query_realm: "0x10"
+  open_realm: "0x11, realm_type u32"
+  realm_response: "0x12"
+  close_realm: "0x13, realm_id u32"
+  cal_stimulus: "0x20"
+  cal_add_point: "0x21, x f64 + y f64 + eye_choice u32"
+  cal_compute: "0x22"
+  cal_retrieve: "0x23"
+  cal_apply: "0x24, calibration blob"
+  disconnect: "0xFF"
+
+SRV (daemon -> client):
+  gaze: "0x01, raw core.GazeSample struct (232 B): gaze_point_2d_norm[2], eye_origin_L_mm[3], eye_origin_R_mm[3], validity_L, validity_R, frame_counter, timestamp_us"
+  response: "0x02, cmd_type u8 + response payload"
+  display_area: "0x03, 9xf64 corners"
+  err: "0xFF, error code u32"
+
+RESPONSE_ROUTING (SocketSource.dispatchMessage):
+  - "gaze -> gaze_cb; response -> response_cb(cmd_type, payload[1..])"
+
+OPENTRACK_UDP:
+  HOST: "127.0.0.1"
+  PORT: "4242"
+  PACKET: "48 B = 6 little-endian f64: X,Y,Z (cm), Yaw,Pitch,Roll (deg)"
+  CLIENTS: "X4 native (opentrackanglefactor/positionfactor = 1.0), any FreeTrack-capable game"
+
+CALIBRATION_BLOB:
+  ROUNDTRIP: "cal_add_point x2 -> cal_compute -> cal_retrieve (blob) -> cal_apply (blob) -> daemon applies on device; bridge also routes blob via daemon Srv.response -> onDaemonResponse -> cal_apply."
+  POINT_PAYLOAD: "16 B = two f64 (x,y) for add_calibration_point; eye_choice NOT sent by bridge (daemon default)."

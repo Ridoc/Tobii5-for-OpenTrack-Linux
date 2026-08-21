@@ -1,0 +1,49 @@
+# calibration-wizard.yaml — v0.2.0 on-screen calibration wizard
+UPDATED: "2026-08-21"
+STATUS: "IMPLEMENTED_UNRELEASED (working tree, uncommitted)"
+BRANCH: "main, commit f6bc2e2 (v0.1.1) + uncommitted v0.2.0 changes"
+
+FILES:
+  - "applications/tobiifree-opentrack/src/calibration.zig (NEW, untracked)"
+  - "applications/tobiifree-opentrack/src/main.zig (modified: wizard integration)"
+  - "applications/tobiifree-opentrack/build.zig (modified: calibration module + import)"
+  - "README.md (modified: wizard docs)"
+  - "driver/src/display_area_config.zig (modified: saveToFile PathAlreadyExists fix)"
+  - "driver/src/socket_source.zig (modified: sendCommand 8KiB buffer + failure logging)"
+
+WIZARD_STATE_MACHINE (CalState):
+  - "IDLE -> STARTED(5 points) -> CAPTURING per point (SAMPLES_PER_POINT=60) -> COMPUTING -> APPLYING -> DONE"
+  - "CANCEL: ESC anywhere -> teardown via g_idle_add (idleCloseCalWindow), 4s calWaitTimeout fallback"
+  - "Corner flip: on-screen dot flips corners each point, instruction text flips bold-yellow at corners"
+
+CAPTURE_GATES:
+  MIN_VALID_PER_POINT: 15
+  MAX_POINT_RETRIES: 3
+  RETRY: "weak/zero-valid corner captures re-capture the SAME point (red on-screen hint), never a hard abort. Fixed after regression where wizard hard-aborted at point 2 (0/60 valid)."
+
+CAL_POINTS:
+  - 5x standard grid (normalized 0..1)
+
+GUI:
+  - "Calibrate button in main window -> fullscreen cairo window"
+  - "green capture counter above dot; bold-yellow instruction below; 'Applying calibration...' state; 'ESC = cancel' hint; progress bar"
+
+WIRE_FLOW:
+  - "sendCalibrationToDaemon builds 16-byte payload = two f64 (x,y) per add_calibration_point (H1 fix: 16 B, not 12 B + dead buffer)"
+  - "finish_calibration replies with blob via Srv.response; blob routed via onDaemonResponse -> cal_apply (blob round-trip)"
+  - "start_calibration / finish_calibration / cal_apply handled synchronously with sendResult"
+
+THREADING_FIXES (H2):
+  - "cal mutex around capture state; redraws only via onTick (main thread); teardown via g_idle_add; 4s calWaitTimeout fallback"
+
+CRASH_FIXES:
+  - "NUL-terminated cairo strings (cairo_show_text segfault)"
+  - "Space keysym 0xff80 -> 0x20"
+  - "key controller moved from drawing area to toplevel window"
+  - "calFeedGaze moved before eye-validity gate (corner eye-loss freeze)"
+
+VERIFICATION_STATUS:
+  - "QA gate (zig build test) NOT yet run"
+  - "blob round-trip (cal_apply) and ~/.config/tobii.json persistence NOT yet verified end-to-end"
+  - "user manual re-test of 5-point wizard with retry-fix binary pending"
+  - "baseline ~/.config/tobii.json md5: 771f74bc78f424a327b7480df0dff7fee"

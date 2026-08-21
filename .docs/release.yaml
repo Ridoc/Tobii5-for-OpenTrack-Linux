@@ -1,0 +1,29 @@
+# release.yaml — release/publish ledger
+UPDATED: "2026-08-21"
+REMOTE: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git"
+BRANCH: "main"
+
+TAGS:
+  v0.1.0: "released"
+  v0.1.1: "released (commit f6bc2e2, tag + push done; GitHub release created at /releases/tag/v0.1.1)"
+
+GITHUB_RELEASES:
+  v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
+
+UNRELEASED_WORK (v0.2.0, working tree, uncommitted):
+  - "calibration wizard (applications/tobiifree-opentrack/src/calibration.zig)"
+  - "wizard integration + threading/redraw/crash fixes (main.zig)"
+  - "blob round-trip via onDaemonResponse -> cal_apply"
+  - "retry-fix for corner capture (MIN_VALID_PER_POINT=15 / MAX_POINT_RETRIES=3, same-point retry)"
+  - "save_to_file PathAlreadyExists fix (display_area_config.zig)"
+  - "socket sendCommand 16KiB buffer + failure logging (socket_source.zig)"
+  - "README.md wizard usage docs"
+
+PENDING_RELEASE_PIPELINE (v0.2.0):
+  1. "qa-tester gate: zig build test"
+  2. "security-reviewer on changed files (socket_source/display_area_config main.zig)"
+  3. "librarian commit + tag + push v0.2.0"
+  4. "gh release create"
+
+HISTORY_NOTES:
+  - "Branch has 38 commits; initial commit 276b34a; frequent tuning commits after; aetherial 'option A: hold rotation on single eye' lineage (kill snap-back counter-move)."

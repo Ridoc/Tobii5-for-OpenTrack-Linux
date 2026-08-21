@@ -75,10 +75,44 @@ info(opentrack): x=   0.0 y=   0.0 z=   0.0  yaw=   1.7° pitch=  -7.2°  (sampl
 The bridge opens a small **GTK4 status window** showing the live pose values
 (X/Y/Z, Yaw/Pitch/Roll) with a **live eye/head visualization** (gaze point on
 a mini screen + a head figure showing the yaw/pitch estimation), **live tuning
-sliders** and a **preset system** —
+sliders**, a **preset system** and a **Calibrate** button —
 switch between built-in profiles (`tobii-official`, `x4`, `x4-smooth`) or
 save your own. All changes apply to the stream
 immediately, no restart needed. Pass `--headless` for console-only operation.
+
+### Display-area calibration
+
+Gaze accuracy depends on the tracker knowing your screen's physical geometry.
+Two mechanisms handle this:
+
+**EDID auto-detect (default).** On startup the daemon reads your GPU's EDID
+data (`/sys/class/drm/card*-DP-*/edid`) and derives the physical panel size,
+sensor offset (`z = 65 mm` clip-mount estimate) and tilt automatically. The
+active geometry is logged at startup:
+`display_area 800x330mm origin=(-400,-10) z=65 tilt=12.00`. Use
+`tobiifreedot --force-display-area` to re-apply a stored config, and note the
+startup warning if `z_mm=0` (display plane through sensor = garbage gaze).
+
+**Visual calibration wizard (v0.2.0).** Click **Calibrate** in the bridge GUI:
+
+1. A fullscreen dark window shows a white dot at the screen center.
+2. Look at the dot, press **SPACE** — ~60 samples are captured (~0.7 s),
+   then the dot moves on. Repeat for all 5 points (center + 4 corners).
+3. **ESC** cancels anytime. Progress bar at the bottom; the instruction sits
+   below the dot (bright yellow), the live capture counter above it (green).
+4. After the last point the wizard computes the sensor-to-screen distance
+   from the averaged eye origins, writes it to `~/.config/tobii.json` and
+   drives the device calibration over the daemon socket:
+   `start_calibration` → `add_calibration_point`×5 → `finish_calibration`,
+   then applies the returned calibration blob with `cal_apply`. The window
+   shows *Applying calibration…* until the blob round-trip completes (a
+   4 s timeout closes the wizard if the daemon doesn't reply).
+
+Tested behavior: a full 5-point run completes and persists the result;
+corner points still complete even if both eyes briefly leave the tracked FOV
+(the wizard consumes every sample; only valid frames enter the average).
+Keep your head still and roughly centered during capture — a point captured
+mostly during eye loss logs `no valid samples` and its data will be poor.
 
 ### In-game setup
 
@@ -125,7 +159,10 @@ pre-rework snapshots are kept as `tobii-official (old)`, `x4 (old)`,
 In the GUI, every slider has a text override (type + Enter) and the preset
 dropdown has **Save** / **Save as…** / **Delete** buttons.
 
-Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md).
+Full docs: start at [`docs/README.md`](docs/README.md) (index), then
+[`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md) for the
+deep dive, [`CHANGELOG.md`](CHANGELOG.md) for version history, and
+[`PLAN.md`](PLAN.md) / [`ARCHITECTURE.md`](ARCHITECTURE.md) for design notes.
 
 ## Troubleshooting
 

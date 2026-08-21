@@ -1,0 +1,32 @@
+# bridge-pipeline.yaml — tobiifree-opentrack Tobii-feel pipeline
+UPDATED: "2026-08-21"
+STATUS: "MATCHES_IMPLEMENTATION (v0.2.0 working tree)"
+
+PIPELINE_STAGES (in order):
+  1. GazeFilter: "3-state dynamic EWMA (fixation 0.03 / pursuit 0.25 / saccade 0.015, time-corrected); saccades never whip the camera."
+  2. HeadPose: "yaw = atan2(dz,dx) of interocular line (both eyes valid); roll = atan2(dy,dx); pitch = atan(dy/neck); x head_gain + pitch_gain."
+  3. ValidationGate: "zero-vector eye rejected; IPD 45-80mm; right eye truly on right; else frame is glitch/eye-swap -> rotation freezes to last good pose, translation keeps tracking."
+  4. Recenter: "settle-window average -> yaw_ref/roll_ref subtracted; auto-recenter at rest (~1.2s within +-30 yaw/+-20 pitch) and on re-acquisition; GUI Recenter button re-captures live."
+  5. Blend: "head + smoothed_gaze x eye_ratio (OEM 85/15)."
+  6. Smoothing: "One Euro (default, adaptive fc), Accela (velocity-adaptive retention, defaults 0.90/0.95 dropping to 0.05 at 180deg/s), None; translation always uses heavier pos_smoothing."
+  7. Curve: "tobii spline (2->0, 10->20, 20->75, 35->180 yaw; asymmetric pitch) / power / linear; capped by yaw/pitch caps then deadzone (pre-curve deadzone since v0.1.1)."
+
+PRESETS:
+  BUILTINS: ["tobii-official", "x4", "x4-smooth", "tobii-official (old)", "x4 (old)", "x4-smooth (old)"]
+  PERSISTENCE: "$XDG_CONFIG_HOME/tobiifree-opentrack/presets.json"
+  CLI: "--preset / --save-preset / --list-presets"
+
+DEFAULTS (tobii-official):
+  yaw_cap: 180, pitch_cap: 90, smoothing: 0.90, pos_smoothing: 0.95, deadzone: 0.15
+  head_gain: 2.0, eye_ratio: 0.15, pos_gain: 2.0, neck: 13 (cm)
+  gaze_scale: 40, gaze_scale_pitch: 30, curve: tobii, curve_exp: 0.5
+
+USER_UX_CONSTRAINTS:
+  - "NEVER auto-center: keep last position until a new one can be calculated."
+  - "Instant re-acquisition when eye returns (no re-lock delay)."
+  - "One-eye over-drive left deliberately as-is."
+  - "GUI stays 2-row layout: sensitivity grid (Yaw cap/Pitch cap/Deadzone/Smoothing/Pos smoothing) + Tobii feel (Head gain/Pitch gain/Eye ratio/Pos gain/Neck/Gaze yaw scale/Gaze pitch scale/Curve exp)."
+
+STREAM: "socket polled at 125 Hz -> game steady stream; GUI snapshot labels ~30 Hz; dedicated stream thread (UI stalls never stall the feed)."
+
+CLI_FLAGS: "--host 127.0.0.1 --port 4242 --preset --list-presets --save-preset --yaw-gain --pitch-gain --smoothing --pos-smoothing --deadzone --head-gain --eye-ratio --pos-gain --neck --gaze-scale --gaze-scale-pitch --curve --curve-exp --flip-yaw --flip-pitch --no-position -v/--verbose --headless"
