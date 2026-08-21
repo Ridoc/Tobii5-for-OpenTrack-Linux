@@ -599,6 +599,15 @@ ref_set: bool = false,
     corner_hold: bool = false,
     corner_side: f64 = 0, // sign of the pinned gaze (+right / -left)
     corner_peak: f64 = 0, // last reliable pre-curve yaw at the corner
+    // Rest-follow ref: the reference is captured once at startup (or on the
+    // Recenter button), but seat drift / tracker baseline leaves the eye-Y
+    // offset stuck, which pins pitch at the ceiling all session. When the
+    // head is genuinely at rest AND the gaze is NOT pinned at a corner, very
+    // slowly nudge the ref toward the current pose so the baseline decays
+    // without ever dragging a held corner pose to center.
+    rest_time: f64 = 0,
+    last_rest_yaw: f64 = 0,
+    last_rest_pitch: f64 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
@@ -606,7 +615,10 @@ ref_set: bool = false,
     const corner_hyst_deg: f64 = 0.5; // estimate must sag this far below the peak to engage
     const pitch_glitch_deg: f64 = 5.0; // max genuine pitch change per frame (~450°/s)
     const n1_y_sanity_mm: f64 = 25.0; // single-eye Y can't be this far from the midpoint
-    const n1_drift_gate_deg: f64 = 6.0; // only drift the one-eye yaw at real corners
+    const rest_follow_s: f64 = 1.0; // head still this long before following
+    const rest_vel_deg_s: f64 = 6.0; // head yaw+pitch speed below this = at rest
+    const rest_follow_rate: f64 = 0.004; // ref blend per frame once at rest (slow, no pop)
+    const rest_center_deg: f64 = 12.0; // only follow when the output pose is near center
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
     const zero_eps: f64 = 1e-3; // treat (x,z)≈(0,0) as a dropped eye
@@ -631,6 +643,7 @@ ref_set: bool = false,
         self.corner_hold = false;
         self.corner_side = 0;
         self.corner_peak = 0;
+        self.rest_time = 0;
     }
 
     /// Process one gaze sample into a 6-DOF pose
@@ -894,13 +907,18 @@ ref_set: bool = false,
                 // correlates with the turn: yaw1e = atan(dx / neck) is
                 // calibrated to the interocular scale (post-gain hp ≈
                 // 0.36·yaw1e on this rig). Ease the held pose toward it —
-                // but ONLY once the held yaw is in real corner territory
-                // (|held| > gate): near center the single-eye dx is dominated
-                // by lean/translation, and chasing it drifts the view off the
-                // true pose. The drift rate is 10°/frame pre-gain (~24°/s
-                // final) so one-eye tracking keeps pace with a real turn.
+                // but ONLY once the GAZE is pinned beyond corner_pin_deg:
+                // the interocular yaw estimate itself COLLAPSES just before
+                // the near eye is occluded (the atan2 saturates at the
+                // tracking edge), so |last_good_yaw| is small right when the
+                // user is staring at the screen edge and the drift would
+                // otherwise never engage. The pinned gaze is the reliable
+                // "at the corner" witness. Near center the single-eye dx is
+                // dominated by lean/translation, so we stay frozen there.
+                // Drift rate is 10°/frame pre-gain (~24°/s final) so one-eye
+                // tracking keeps pace with a real turn.
                 const yaw1e = std.math.atan((center[0] - self.ref_mid[0]) / neck_mm) * 180.0 / std.math.pi;
-                if (@abs(self.last_good_yaw) > n1_drift_gate_deg) {
+                if (@abs(gaze_yaw) > corner_pin_deg) {
                     const flip_sign: f64 = if (p.flip_yaw) -1.0 else 1.0;
                     const n1_target = 0.36 * yaw1e / (p.head_gain * flip_sign);
                     const n1_drift = 10.0 * dt; // °/frame pre-gain (≈24 °/s final)
@@ -998,6 +1016,40 @@ ref_set: bool = false,
             self.corner_hold = false;
             self.corner_side = 0;
             self.corner_peak = 0;
+        }
+
+        // 3d. Rest-follow ref (gentle). The ref is captured once at startup
+        //     or on Recenter, but seat drift / tracker baseline leaves the
+        //     eye-Y offset stuck — with no auto-recenter that pins pitch at
+        //     the 90° ceiling for the whole session. When the head is
+        //     genuinely at rest (yaw+pitch speed low for a moment) AND the
+        //     gaze is NOT pinned at a corner AND the output pose is near
+        //     center, very slowly nudge the ref toward the current pose. This
+        //     decays a stale baseline over a few seconds without ever dragging
+        //     a held corner pose to center (the corner/gaze checks refuse it).
+        const dt_r = @min(dt, 0.1);
+        const rest_speed = (@abs(yaw - self.last_rest_yaw) + @abs(pitch - self.last_rest_pitch)) / @max(dt_r, 1e-6);
+        self.last_rest_yaw = yaw;
+        self.last_rest_pitch = pitch;
+        if (rest_speed < rest_vel_deg_s) {
+            self.rest_time += dt_r;
+        } else {
+            self.rest_time = 0;
+        }
+        const rest_engaged = self.rest_time >= rest_follow_s and
+            !self.corner_hold and @abs(gaze_yaw) <= corner_pin_deg and
+            @abs(yaw) <= rest_center_deg and @abs(pitch) <= rest_center_deg;
+        if (rest_engaged) {
+            const r = rest_follow_rate * dt / 0.0111; // normalized to ~90fps
+            for (0..3) |i| self.ref_mid[i] += r * (center[i] - self.ref_mid[i]);
+            if (rot_both) {
+                self.yaw_ref += r * (inter_yaw - self.yaw_ref);
+                self.roll_ref += r * (inter_roll - self.roll_ref);
+            }
+            // The ref just moved: the interocular rel_yaw changed, so re-arm
+            // last-good to avoid tripping the glitch clamp against the old
+            // pose (which would freeze yaw at the pre-follow offset).
+            self.has_last_good = false;
         }
 
         // 4. Response curve + cap + deadzone on the HEAD signal, then add the
