@@ -578,6 +578,15 @@ ref_set: bool = false,
     last_good_roll: f64 = 0,
     last_good_y: f64 = 0, // last sane eye-midpoint Y (mm) — n=1 sanity gate
     has_last_good: bool = false,
+    // Single-eye Y anchor: when n drops 2→1 the remaining (far) eye's raw Y is
+    // offset from the true eye midpoint (interocular Y separation) and the
+    // estimate can settle over the first ~0.5 s. Adopting it directly pins
+    // pitch up/down at corner holds. The anchor ties the single-eye Y to the
+    // last n=2 midpoint so we track CHANGES, not the absolute offset.
+    n1_y_anchor: f64 = 0, // single-eye Y captured at the n→1 transition
+    n1_y_base: f64 = 0, // last n=2 midpoint Y at the transition (= last_good_y)
+    n1_y_anchor_set: bool = false, // anchor captured for the current n=1 episode
+    n1_settle: f64 = 0, // elapsed n=1 settle time (s)
     pos_hold: [3]f64 = .{ 0, 0, 0 },
     has_pos_hold: bool = false,
     // Absolute-pose recentering: interocular yaw/roll are ABSOLUTE
@@ -599,6 +608,13 @@ ref_set: bool = false,
     corner_hold: bool = false,
     corner_side: f64 = 0, // sign of the pinned gaze (+right / -left)
     corner_peak: f64 = 0, // last reliable pre-curve yaw at the corner
+    // Tug-only gaze low-pass: the raw scaled gaze flickers ±2-3°/frame from
+    // micro-saccades, and the fine-aim term (gaze·ratio·gate) passes that
+    // straight into the output as visible jitter while the head rests. This
+    // pair smooths ONLY the tug path — corner-pin detection and the VOR gate
+    // keep the raw signal so their timing stays sharp.
+    tug_yaw_f: OneEuroFilter = .{},
+    tug_pitch_f: OneEuroFilter = .{},
     // Rest-follow ref: the reference is captured once at startup (or on the
     // Recenter button), but seat drift / tracker baseline leaves the eye-Y
     // offset stuck, which pins pitch at the ceiling all session. When the
@@ -615,10 +631,15 @@ ref_set: bool = false,
     const corner_hyst_deg: f64 = 0.5; // estimate must sag this far below the peak to engage
     const pitch_glitch_deg: f64 = 5.0; // max genuine pitch change per frame (~450°/s)
     const n1_y_sanity_mm: f64 = 25.0; // single-eye Y can't be this far from the midpoint
+    const n1_y_settle_s: f64 = 0.5; // hold pitch while the single-eye Y estimate settles
     const rest_follow_s: f64 = 1.0; // head still this long before following
     const rest_vel_deg_s: f64 = 6.0; // head yaw+pitch speed below this = at rest
     const rest_follow_rate: f64 = 0.004; // ref blend per frame once at rest (slow, no pop)
     const rest_center_deg: f64 = 12.0; // only follow when the output pose is near center
+    const rest_gaze_deg: f64 = 4.0; // AND the gaze is near screen center (both axes):
+    // a held down-look (reading, taskbar) has a still head too — without this
+    // check the ref crept toward the eye position and the view wandered off.
+    const tug_smoothing: f64 = 0.85; // tug low-pass: fc_min 1.2 Hz, saccade-front ~60 ms
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
     const zero_eps: f64 = 1e-3; // treat (x,z)≈(0,0) as a dropped eye
@@ -781,6 +802,12 @@ ref_set: bool = false,
         const g = self.gaze.filter(sample.gaze_point_2d_norm, dt);
         const gaze_yaw = (g[0] - 0.5) * p.gaze_scale;
         const gaze_pitch = (0.5 - g[1]) * p.gaze_scale_pitch;
+        // Tug-only low-pass: the state filter's pursuit band (α up to 0.25)
+        // still passes ±2-3°/frame fixation flicker, which the fine-aim term
+        // would render as jitter while the head rests. Corner/gate logic
+        // below keeps the raw values.
+        const tug_yaw = self.tug_yaw_f.update(gaze_yaw, dt, tug_smoothing);
+        const tug_pitch = self.tug_pitch_f.update(gaze_pitch, dt, tug_smoothing);
 
         // 2. head rotation.
         //    Yaw/roll come from the interocular line when both eyes are
@@ -840,6 +867,8 @@ ref_set: bool = false,
                         self.rot_yaw.resetTo(rel_yaw);
                         self.rot_pitch.resetTo(self.last_good_pitch * p.pitch_gain);
                         self.roll_s.resetTo(rel_roll);
+                        self.tug_yaw_f.resetTo(gaze_yaw);
+                        self.tug_pitch_f.resetTo(gaze_pitch);
                         self.was_lost = false;
                     }
                 } else if (@abs(rel_yaw - self.last_good_yaw) > glitch_deg or
@@ -860,6 +889,9 @@ ref_set: bool = false,
                 head_roll = self.last_good_roll;
                 head_pitch = self.last_good_pitch;
                 self.was_n1 = false;
+                // n=2 again: the single-eye anchor is stale, re-capture on the
+                // next n=1 transition against this fresh midpoint.
+                self.n1_y_anchor_set = false;
             } else {
                 // One eye (or a glitched pair): HOLD yaw/roll, keep pitch live.
                 // Head ROTATION does not translate the eye midpoint (it
@@ -881,24 +913,52 @@ ref_set: bool = false,
                 // the held pose toward it, rate-limited so lean crosstalk or
                 // noise can't snap the view.
                 self.n1_timer += dt;
-                if (!self.has_last_good) {
+                if (!self.has_last_good and !self.n1_y_anchor_set) {
                     self.last_good_yaw = 0;
                     self.last_good_roll = 0;
                     self.last_good_pitch = pitch_est;
                     self.last_good_y = center[1];
                     self.has_last_good = true;
+                    // No n=2 midpoint to anchor against (first sample is n=1):
+                    // adopt the raw single-eye Y as the anchor so the effective
+                    // Y is a no-op this episode.
+                    self.n1_y_anchor = center[1];
+                    self.n1_y_base = center[1];
+                    self.n1_y_anchor_set = true;
+                    self.n1_settle = 0;
                 }
-                // Y-sanity: the single visible eye's Y can't be ~25 mm from
-                // the last midpoint (eyes are level; even a 20° head roll is
-                // only ~23 mm). A jump beyond that is a tracker artifact (the
-                // f3640-style eye-Y glitch) — hold the last sane pitch
-                // instead of letting it pin the view.
-                var n1_pitch = pitch_est;
-                if (@abs(center[1] - self.last_good_y) > n1_y_sanity_mm) {
-                    n1_pitch = self.last_good_pitch;
+                // Single-eye Y anchor: at the n=2→1 transition the remaining
+                // (far) eye's raw Y sits off the true eye midpoint and the
+                // estimate can drift over the first ~0.5 s — adopting it
+                // directly pins pitch up/down at corner holds (the +17 mm Y
+                // step that climbed pitch to the ceiling). So on the first n=1
+                // frame we anchor the single-eye Y to the last n=2 midpoint,
+                // HOLD pitch through a short settle window, then track Y
+                // changes from the anchored baseline — a genuine head-pitch
+                // move still registers, the transition bias does not.
+                if (!self.n1_y_anchor_set) {
+                    self.n1_y_anchor = center[1];
+                    self.n1_y_base = self.last_good_y;
+                    self.n1_settle = 0;
+                    self.n1_y_anchor_set = true;
+                }
+                self.n1_settle += dt;
+                const n1_y_eff = if (self.n1_settle < n1_y_settle_s)
+                    self.n1_y_base // hold during the settle: no bias, no drift
+                else
+                    center[1] - (self.n1_y_anchor - self.n1_y_base);
+                const n1_pitch = std.math.atan((n1_y_eff - self.ref_mid[1]) / neck_mm) * 180.0 / std.math.pi;
+                // Y-sanity on the EFFECTIVE Y: even anchored, a single-eye Y
+                // can't jump ~25 mm from the last midpoint (eyes are level;
+                // even a 20° head roll is only ~23 mm). A jump beyond that is
+                // a tracker artifact (the f3640-style eye-Y glitch) — hold the
+                // last sane pitch instead of letting it pin the view.
+                var n1_pitch_out = n1_pitch;
+                if (@abs(n1_y_eff - self.last_good_y) > n1_y_sanity_mm) {
+                    n1_pitch_out = self.last_good_pitch;
                 } else {
-                    self.last_good_pitch = pitch_est;
-                    self.last_good_y = center[1];
+                    self.last_good_pitch = n1_pitch;
+                    self.last_good_y = n1_y_eff;
                 }
                 // Corner continuation: at far turns the NEAR eye is occluded
                 // by the nose and n stays 1 for a long stretch — a pure
@@ -926,7 +986,7 @@ ref_set: bool = false,
                 }
                 head_yaw = self.last_good_yaw;
                 head_roll = self.last_good_roll;
-                head_pitch = n1_pitch;
+                head_pitch = n1_pitch_out;
                 self.was_n1 = true;
             }
             if (p.flip_yaw) head_yaw = -head_yaw;
@@ -1022,11 +1082,13 @@ ref_set: bool = false,
         //     or on Recenter, but seat drift / tracker baseline leaves the
         //     eye-Y offset stuck — with no auto-recenter that pins pitch at
         //     the 90° ceiling for the whole session. When the head is
-        //     genuinely at rest (yaw+pitch speed low for a moment) AND the
-        //     gaze is NOT pinned at a corner AND the output pose is near
-        //     center, very slowly nudge the ref toward the current pose. This
-        //     decays a stale baseline over a few seconds without ever dragging
-        //     a held corner pose to center (the corner/gaze checks refuse it).
+        //     genuinely at rest AND the gaze sits near SCREEN CENTER (both
+        //     axes) AND the output pose is near center, very slowly nudge the
+        //     ref toward the current pose. The gaze-center requirement is what
+        //     makes this safe: looking anywhere else (reading, a held
+        //     down-look) must never re-zero, or the view wanders off while
+        //     the user holds still. Corners are refused via corner_hold and
+        //     the pinned-gaze check.
         const dt_r = @min(dt, 0.1);
         const rest_speed = (@abs(yaw - self.last_rest_yaw) + @abs(pitch - self.last_rest_pitch)) / @max(dt_r, 1e-6);
         self.last_rest_yaw = yaw;
@@ -1037,7 +1099,8 @@ ref_set: bool = false,
             self.rest_time = 0;
         }
         const rest_engaged = self.rest_time >= rest_follow_s and
-            !self.corner_hold and @abs(gaze_yaw) <= corner_pin_deg and
+            !self.corner_hold and
+            @abs(gaze_yaw) <= rest_gaze_deg and @abs(gaze_pitch) <= rest_gaze_deg and
             @abs(yaw) <= rest_center_deg and @abs(pitch) <= rest_center_deg;
         if (rest_engaged) {
             const r = rest_follow_rate * dt / 0.0111; // normalized to ~90fps
@@ -1077,8 +1140,8 @@ ref_set: bool = false,
         // only. Flipping the gaze too (old code) inverted the tug: glance
         // right → view yanked left, and with the binary gate snapping 1↔0 it
         // stepped ±(gaze·ratio) in one frame (up to ~10° at 0.47 ratio).
-        const fy = fy_head + gaze_yaw * p.eye_ratio * gate_eff;
-        const fp = fp_head + gaze_pitch * p.eye_ratio * gate_eff;
+        const fy = fy_head + tug_yaw * p.eye_ratio * gate_eff;
+        const fp = fp_head + tug_pitch * p.eye_ratio * gate_eff;
 
         if (std.posix.getenv("TOBII_TRACE") != null) {
             var buf2: [96]u8 = undefined;

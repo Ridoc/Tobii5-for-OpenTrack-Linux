@@ -222,6 +222,21 @@ GUI's **Save as…**.
 
 ## Troubleshooting
 
+- **Tracker LED flashing but no eyes detected after suspend/hibernation** —
+  Linux suspend (and especially suspend-to-disk) leaves the Tobii USB
+  endpoint in a stale state: the LED keeps blinking, but the daemon streams
+  only invalid samples (`vL=4 vR=4`) and the bridge never sees a valid eye.
+  Restart the daemon — it re-opens the USB transport and re-applies the
+  display area if the device power-cycled:
+
+  ```sh
+  killall tobiifreedot
+  nix develop -c bash -c "cd applications/tobiifreed && zig build run"
+  ```
+
+  If the bridge doesn't reconnect to the socket afterwards, restart it too
+  (`killall tobiifree-opentrack`, then the usual `just opentrack`).
+
 - **Inputs freeze then "reset to zero"** — older builds polled the daemon
   socket from the GTK UI thread, so any UI/compositor stall stalled the game
   feed and the dt gap tripped a re-center. The stream now runs on its own

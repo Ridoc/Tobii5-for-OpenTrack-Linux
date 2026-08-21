@@ -127,6 +127,14 @@ dropdown has **Save** / **Save as…** / **Delete** buttons.
 
 Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md).
 
+## Troubleshooting
+
+- **Tracker LED flashing but no eyes detected after suspend/hibernation** —
+  restart the daemon (it re-opens the USB link and re-applies the display
+  area): `killall tobiifreedot`, then `nix develop -c bash -c "cd
+  applications/tobiifreed && zig build run"`. Restart the bridge too if it
+  doesn't reconnect. See the full docs for details.
+
 ## What's here
 
 - **`applications/tobiifree-opentrack/`** — the OpenTrack bridge with a GTK4
