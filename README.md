@@ -130,10 +130,10 @@ Full docs: [`docs/x4-foundations-opentrack.md`](docs/x4-foundations-opentrack.md
 ## Troubleshooting
 
 - **Tracker LED flashing but no eyes detected after suspend/hibernation** —
-  restart the daemon (it re-opens the USB link and re-applies the display
-  area): `killall tobiifreedot`, then `nix develop -c bash -c "cd
-  applications/tobiifreed && zig build run"`. Restart the bridge too if it
-  doesn't reconnect. See the full docs for details.
+  restarting the daemon alone does **not** recover it. **Unplug and re-plug
+  the USB cable**, then restart the daemon (`killall tobiifreedot`, then
+  `nix develop -c bash -c "cd applications/tobiifreed && zig build run"`),
+  and the bridge too if it doesn't reconnect. See the full docs for details.
 
 ## What's here
 

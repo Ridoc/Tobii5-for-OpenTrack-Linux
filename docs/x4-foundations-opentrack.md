@@ -226,8 +226,10 @@ GUI's **Save as…**.
   Linux suspend (and especially suspend-to-disk) leaves the Tobii USB
   endpoint in a stale state: the LED keeps blinking, but the daemon streams
   only invalid samples (`vL=4 vR=4`) and the bridge never sees a valid eye.
-  Restart the daemon — it re-opens the USB transport and re-applies the
-  display area if the device power-cycled:
+  Restarting the daemon alone does **not** recover it — the USB endpoint
+  needs a real bus reset. **Unplug and re-plug the USB cable**, then restart
+  the daemon (it re-opens the USB transport and re-applies the display area
+  if the device power-cycled):
 
   ```sh
   killall tobiifreedot
