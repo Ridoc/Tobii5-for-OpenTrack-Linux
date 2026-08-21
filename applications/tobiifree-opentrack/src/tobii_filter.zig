@@ -67,6 +67,9 @@ pub const Preset = struct {
     flip_yaw: bool = false,
     flip_pitch: bool = false,
     send_position: bool = true,
+    pre_curve_dz: f64 = 0.02, // ° pre-curve deadzone (kills smoother noise before Catmull-Rom amplifies it)
+    eye_ratio_core: f64 = 0.80, // eye_ratio at screen center (eyes dominate)
+    core_zone_radius: f64 = 0.10, // gaze_dev radius for core zone (normalized 0–1)
 };
 
 pub const BUILTIN_PRESETS = [_]Preset{
@@ -1115,6 +1118,30 @@ ref_set: bool = false,
             self.has_last_good = false;
         }
 
+        // 3b. Pre-curve deadzone: zero the smoother output before the
+        //     Catmull-Rom curve if below threshold. Kills 0.01° smoother noise
+        //     before the 5-7.5× curve slope amplifies it.
+        var yaw_pre = yaw;
+        var pitch_pre = pitch;
+        if (@abs(yaw) < p.pre_curve_dz) yaw_pre = 0;
+        if (@abs(pitch) < p.pre_curve_dz) pitch_pre = 0;
+
+        // 3c. Adaptive eye ratio — 3 zones based on gaze distance from center.
+        //     Core (< core_zone_radius): eyes dominate (eye_ratio_core).
+        //     Middle (core_zone_radius – 4×): linear ramp core→edge.
+        //     Edge (> 4×): head dominates (eye_ratio).
+        const gx = g[0] - 0.5;
+        const gy = g[1] - 0.5;
+        const gaze_dev = @sqrt(gx * gx + gy * gy);
+        const core_r = p.core_zone_radius;
+        const mid_outer = core_r * 4.0;
+        const effective_eye_ratio = if (gaze_dev < core_r)
+            p.eye_ratio_core
+        else if (gaze_dev < mid_outer)
+            p.eye_ratio_core + (p.eye_ratio - p.eye_ratio_core) * (gaze_dev - core_r) / (mid_outer - core_r)
+        else
+            p.eye_ratio;
+
         // 4. Response curve + cap + deadzone on the HEAD signal, then add the
         //    gated gaze as a small absolute-degree fine-aim offset in OUTPUT
         //    space (post-curve). This keeps the gaze a subtle tug regardless of
@@ -1123,14 +1150,14 @@ ref_set: bool = false,
         //    point the same way.
         const fy_head = deadzone(applyCurve(
             @enumFromInt(p.curve_mode),
-            yaw,
+            yaw_pre,
             p.max_yaw,
             p.curve_exp,
             false,
         ), p.deadzone);
         const fp_head = deadzone(applyCurve(
             @enumFromInt(p.curve_mode),
-            pitch,
+            pitch_pre,
             p.max_pitch,
             p.curve_exp,
             true,
@@ -1140,8 +1167,8 @@ ref_set: bool = false,
         // only. Flipping the gaze too (old code) inverted the tug: glance
         // right → view yanked left, and with the binary gate snapping 1↔0 it
         // stepped ±(gaze·ratio) in one frame (up to ~10° at 0.47 ratio).
-        const fy = fy_head + tug_yaw * p.eye_ratio * gate_eff;
-        const fp = fp_head + tug_pitch * p.eye_ratio * gate_eff;
+        const fy = fy_head + tug_yaw * effective_eye_ratio * gate_eff;
+        const fp = fp_head + tug_pitch * effective_eye_ratio * gate_eff;
 
         if (std.posix.getenv("TOBII_TRACE") != null) {
             var buf2: [96]u8 = undefined;
@@ -1151,8 +1178,8 @@ ref_set: bool = false,
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
-            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} ch={d} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s}\n", .{
-                head_yaw, gaze_yaw, fy_head, head_pitch, gaze_pitch, fp_head, yaw, pitch, both, fy, fp,
+            std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} er={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} ch={d} n={d} n1t={d:.2} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s}\n", .{
+                head_yaw, gaze_yaw, fy_head, head_pitch, gaze_pitch, fp_head, yaw, pitch, both, fy, fp, effective_eye_ratio,
                 center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, gate_eff, @intFromBool(self.corner_hold), n, self.n1_timer, self.last_good_yaw,
                 self.rot_yaw.cutoff(), @intFromBool(p.flip_yaw), @intFromBool(p.flip_pitch), smoothModeName(mode),
             });

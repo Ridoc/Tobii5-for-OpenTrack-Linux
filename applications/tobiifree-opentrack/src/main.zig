@@ -81,6 +81,8 @@ var g_draw: ?*c.GtkDrawingArea = null;
 // Gaze/head visualization state (stream thread writes, UI thread draws).
 const TRAIL_LEN: usize = 24;
 var g_gaze_norm: [2]f64 = .{ 0.5, 0.5 };
+var g_gaze_ref: [2]f64 = .{ 0.5, 0.5 };
+var g_gaze_ref_set: bool = false;
 var g_trail: [TRAIL_LEN][2]f64 = .{.{ 0.5, 0.5 }} ** TRAIL_LEN;
 var g_trail_head: usize = 0;
 var g_eye_l_norm: [2]f64 = .{ 0.5, 0.5 };
@@ -866,7 +868,7 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     const window = c.gtk_application_window_new(@ptrCast(app));
     g_window = @ptrCast(window);
     c.gtk_window_set_title(@ptrCast(window), "Tobii → OpenTrack");
-    c.gtk_window_set_default_size(@ptrCast(window), 680, 920);
+    c.gtk_window_set_default_size(@ptrCast(window), 1024, 780);
 
     // CSS: monospace values.
     const css = c.gtk_css_provider_new();

@@ -14,9 +14,11 @@
 const std = @import("std");
 const core = @import("tobiifree_core");
 const Tracker = @import("tracker").Tracker;
-const LibusbTransport = @import("libusb_transport").LibusbTransport;
+const proto = @import("daemon_protocol");
 const Server = @import("server").Server;
 const WsServer = @import("ws_server").WsServer;
+const da_config = @import("display_area_config");
+const LibusbTransport = @import("libusb_transport").LibusbTransport;
 
 const log = std.log.scoped(.tobiifreedot);
 
@@ -25,8 +27,6 @@ pub const std_options: std.Options = .{
 };
 
 const CONFIG_PATH = ".config/tobii.json";
-
-const proto = @import("daemon_protocol");
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -254,101 +254,83 @@ fn sendResult(client_fd: std.posix.fd_t, cmd_type: u8, is_ws: bool, ok: bool, pa
     }
 }
 
-// ── Config loading (same as overlay) ────────────────────────────────
+// ── Config loading (via shared display_area_config module) ──────────
 
 fn loadDisplayArea() Tracker.DisplayArea {
     const home = std.posix.getenv("HOME") orelse return .{};
     var path_buf: [512]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return .{};
+    const cfg = da_config.loadFromFile(path);
+    return da_config.toTrackerDisplayArea(cfg, Tracker.DisplayArea);
+}
 
-    const file = std.fs.cwd().openFile(path, .{}) catch return .{};
-    defer file.close();
+// ── --init-config ──────────────────────────────────────────────────
 
-    var buf: [4096]u8 = undefined;
-    const n = file.readAll(&buf) catch return .{};
-
-    const Config = struct { display_area: ?std.json.Value = null };
-    const parsed = std.json.parseFromSlice(Config, std.heap.page_allocator, buf[0..n], .{
-        .ignore_unknown_fields = true,
-    }) catch return .{};
-
-    const da_val = parsed.value.display_area orelse return .{};
-    const obj = switch (da_val) {
-        .object => |o| o,
-        else => return .{},
+fn initConfig() void {
+    const home = std.posix.getenv("HOME") orelse {
+        log.err("$HOME not set", .{});
+        return;
     };
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return;
+    if (std.fs.cwd().access(path, .{})) |_| {
+        log.info("{s} already exists", .{path});
+    } else |_| {
+        // Detect screen dimensions from EDID.
+        const edid = da_config.detectEdid();
+        const cfg = if (edid) |e| blk: {
+            log.info("EDID detected: {s} {d:.0}×{d:.0}mm", .{ e.connected_name orelse "unknown", e.width_mm, e.height_mm });
+            break :blk da_config.defaultFromEdid(e);
+        } else blk: {
+            log.warn("no EDID detected, using fallback dimensions", .{});
+            break :blk da_config.DisplayAreaConfig{};
+        };
 
-    var area = Tracker.DisplayArea{};
-    if (getFloat(obj, "w_mm")) |v| area.w_mm = v;
-    if (getFloat(obj, "h_mm")) |v| area.h_mm = v;
-    if (getFloat(obj, "z_mm")) |v| area.z_mm = v;
-    if (getFloat(obj, "tilt")) |v| area.tilt_deg = v;
+        var dir_buf: [512]u8 = undefined;
+        const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config", .{home}) catch return;
+        std.fs.cwd().makePath(dir_path) catch {};
+        const file = std.fs.cwd().createFile(path, .{}) catch |err| {
+            log.err("create config: {}", .{err});
+            return;
+        };
+        defer file.close();
 
-    // cx/cy: same logic as overlay.
-    const half_w = area.w_mm / 2.0;
-    const half_h = area.h_mm / 2.0;
+        var json_buf: [1024]u8 = undefined;
+        const json = da_config.toJsonString(cfg, &json_buf) orelse return;
+        file.writeAll(json) catch |err| {
+            log.err("write config: {}", .{err});
+            return;
+        };
+        log.info("created {s}: {d:.0}×{d:.0}mm z={d:.0}mm tilt={d:.1}°", .{
+            path, cfg.w_mm, cfg.h_mm, cfg.z_mm, cfg.tilt_deg,
+        });
+    }
+}
 
-    if (obj.get("cx")) |cx_val| {
-        if (parsePositionExpr(cx_val, half_w, false)) |cx| {
-            area.ox_mm = -cx - half_w;
+fn parseWsArg(arg: []const u8, addr: *u32, port: *u16) void {
+    if (std.mem.lastIndexOfScalar(u8, arg, ':')) |colon| {
+        if (parseIpv4(arg[0..colon])) |a| addr.* = a;
+        if (std.fmt.parseInt(u16, arg[colon + 1 ..], 10)) |p| port.* = p else |_| {}
+    } else {
+        if (std.fmt.parseInt(u16, arg, 10)) |p| port.* = p else |_| {}
+    }
+}
+
+fn parseIpv4(s: []const u8) ?u32 {
+    var octets: [4]u8 = undefined;
+    var count: usize = 0;
+    var start: usize = 0;
+    for (s, 0..) |c, i| {
+        if (c == '.') {
+            if (count >= 3) return null;
+            octets[count] = std.fmt.parseInt(u8, s[start..i], 0) catch return null;
+            count += 1;
+            start = i + 1;
         }
     }
-    if (obj.get("cy")) |cy_val| {
-        if (parsePositionExpr(cy_val, half_h, true)) |cy| {
-            area.oy_mm = -cy - half_h;
-        }
-    }
-    return area;
-}
-
-fn getFloat(obj: std.json.ObjectMap, key: []const u8) ?f64 {
-    const val = obj.get(key) orelse return null;
-    return switch (val) {
-        .float => |f| f,
-        .integer => |i| @as(f64, @floatFromInt(i)),
-        else => null,
-    };
-}
-
-fn parsePositionExpr(val: std.json.Value, half: f64, is_vertical: bool) ?f64 {
-    switch (val) {
-        .float => |f| return f,
-        .integer => |i| return @floatFromInt(i),
-        .string => |s| return evalAnchorExpr(s, half, is_vertical),
-        else => return null,
-    }
-}
-
-fn evalAnchorExpr(expr: []const u8, half: f64, is_vertical: bool) ?f64 {
-    var pos: usize = 0;
-    while (pos < expr.len and expr[pos] == ' ') pos += 1;
-    if (pos >= expr.len) return null;
-
-    const anchor: f64 = switch (expr[pos]) {
-        't' => if (is_vertical) half else return null,
-        'b' => if (is_vertical) -half else return null,
-        'l' => if (!is_vertical) -half else return null,
-        'r' => if (!is_vertical) half else return null,
-        'c' => 0,
-        else => return null,
-    };
-    pos += 1;
-
-    while (pos < expr.len and expr[pos] == ' ') pos += 1;
-    if (pos >= expr.len) return anchor;
-
-    const sign: f64 = switch (expr[pos]) {
-        '+' => 1,
-        '-' => -1,
-        else => return null,
-    };
-    pos += 1;
-
-    while (pos < expr.len and expr[pos] == ' ') pos += 1;
-    if (pos >= expr.len) return null;
-
-    const num = std.fmt.parseFloat(f64, expr[pos..]) catch return null;
-    return anchor + sign * num;
+    if (count != 3) return null;
+    octets[3] = std.fmt.parseInt(u8, s[start..], 0) catch return null;
+    return @bitCast(octets);
 }
 
 // ── Signal handling ─────────────────────────────────────────────────
@@ -374,6 +356,7 @@ pub fn main() void {
     var ws_addr: u32 = std.mem.nativeToBig(u32, 0x7f000001); // 127.0.0.1
     var ws_port: u16 = 7081;
     var ws_enabled: bool = false;
+    var force_display_area: bool = false;
 
     var args = std.process.args();
     _ = args.next();
@@ -381,13 +364,13 @@ pub fn main() void {
         if (std.mem.eql(u8, arg, "--init-config")) {
             initConfig();
             return;
+        } else if (std.mem.eql(u8, arg, "--force-display-area")) {
+            force_display_area = true;
         } else if (std.mem.eql(u8, arg, "--ws")) {
             ws_enabled = true;
             // Peek at next arg for optional address.
             if (args.next()) |ws_arg| {
                 if (ws_arg.len > 0 and ws_arg[0] == '-') {
-                    // Not a WS argument, it's another flag — rewind not possible,
-                    // but we only have --ws and --init-config so this won't happen.
                     continue;
                 }
                 parseWsArg(ws_arg, &ws_addr, &ws_port);
@@ -400,6 +383,11 @@ pub fn main() void {
     log.info("display_area {d:.0}x{d:.0}mm  origin=({d:.0},{d:.0})  z={d:.0}  tilt={d:.2}", .{
         display.w_mm, display.h_mm, display.ox_mm, display.oy_mm, display.z_mm, display.tilt_deg,
     });
+
+    if (display.z_mm == 0) {
+        log.warn("display_area z_mm=0 — gaze coordinates will be garbage!", .{});
+        log.warn("run `tobiifreedot --init-config` to auto-detect your screen", .{});
+    }
 
     // Open USB transport.
     transport = LibusbTransport.init() catch |err| {
@@ -419,9 +407,13 @@ pub fn main() void {
     };
     defer tracker.deinit();
 
-    // Apply display area from config only if device was power-cycled (reset to tiny default).
-    if (tracker.display.isReset()) {
-        log.info("device display area looks reset, applying config", .{});
+    // Apply display area from config.
+    if (force_display_area or tracker.display.isReset()) {
+        if (force_display_area) {
+            log.info("force-applying display area from config", .{});
+        } else {
+            log.info("device display area looks reset, applying config", .{});
+        }
         if (!tracker.setDisplayArea(display)) {
             log.warn("failed to set display area from config", .{});
         }
@@ -487,73 +479,6 @@ pub fn main() void {
 
     log.info("shutting down", .{});
     usb_thread.join();
-}
-
-// ── --init-config ──────────────────────────────────────────────────
-
-fn initConfig() void {
-    const home = std.posix.getenv("HOME") orelse {
-        log.err("$HOME not set", .{});
-        return;
-    };
-    var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return;
-    if (std.fs.cwd().access(path, .{})) |_| {
-        log.info("{s} already exists", .{path});
-    } else |_| {
-        var dir_buf: [512]u8 = undefined;
-        const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config", .{home}) catch return;
-        std.fs.cwd().makePath(dir_path) catch {};
-        const file = std.fs.cwd().createFile(path, .{}) catch |err| {
-            log.err("create config: {}", .{err});
-            return;
-        };
-        defer file.close();
-        file.writeAll(
-            \\{
-            \\  "display_area": {
-            \\    "w_mm": 800,
-            \\    "h_mm": 340,
-            \\    "z_mm": 0,
-            \\    "tilt": 0,
-            \\    "cx": 0,
-            \\    "cy": "b - 10"
-            \\  }
-            \\}
-            \\
-        ) catch return;
-        log.info("created {s}", .{path});
-    }
-}
-
-// ── --ws argument parsing ──────────────────────────────────────────
-
-fn parseWsArg(arg: []const u8, addr: *u32, port: *u16) void {
-    // Check if arg contains ':' → addr:port
-    if (std.mem.lastIndexOfScalar(u8, arg, ':')) |colon| {
-        if (parseIpv4(arg[0..colon])) |a| addr.* = a;
-        if (std.fmt.parseInt(u16, arg[colon + 1 ..], 10)) |p| port.* = p else |_| {}
-    } else {
-        // Just a port number.
-        if (std.fmt.parseInt(u16, arg, 10)) |p| port.* = p else |_| {}
-    }
-}
-
-fn parseIpv4(s: []const u8) ?u32 {
-    var octets: [4]u8 = undefined;
-    var count: usize = 0;
-    var start: usize = 0;
-    for (s, 0..) |c, i| {
-        if (c == '.') {
-            if (count >= 3) return null;
-            octets[count] = std.fmt.parseInt(u8, s[start..i], 10) catch return null;
-            count += 1;
-            start = i + 1;
-        }
-    }
-    if (count != 3) return null;
-    octets[3] = std.fmt.parseInt(u8, s[start..], 10) catch return null;
-    return @bitCast(octets);
 }
 
 // ── USB thread ─────────────────────────────────────────────────────
