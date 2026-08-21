@@ -1,7 +1,7 @@
 # calibration-wizard.yaml — v0.2.0 on-screen calibration wizard
 UPDATED: "2026-08-21"
-STATUS: "IMPLEMENTED_UNRELEASED (working tree, uncommitted)"
-BRANCH: "main, commit f6bc2e2 (v0.1.1) + uncommitted v0.2.0 changes"
+STATUS: "SHIPPED in v0.2.0 (commit bf2bf2c, tag v0.2.0, GitHub release created)"
+BRANCH: "main, commits 6c9070a (docs) + bf2bf2c (code), pushed, in sync with origin"
 
 FILES:
   - "applications/tobiifree-opentrack/src/calibration.zig (NEW, untracked)"
@@ -43,7 +43,8 @@ CRASH_FIXES:
   - "calFeedGaze moved before eye-validity gate (corner eye-loss freeze)"
 
 VERIFICATION_STATUS:
-  - "QA gate (zig build test) NOT yet run"
-  - "blob round-trip (cal_apply) and ~/.config/tobii.json persistence NOT yet verified end-to-end"
-  - "user manual re-test of 5-point wizard with retry-fix binary pending"
+  - "QA gate PASS (driver zig build test; bridge + daemon ReleaseSafe builds; Debug build blocked by toolchain relocation bug — not code)"
+  - "security review PASS (1 low note: predictable ~/.config/tobii.json path -> tech-debt)"
+  - "blob round-trip (cal_apply) and ~/.config/tobii.json persistence NOT yet verified end-to-end (open tech-debt item)"
+  - "user manual re-test of 5-point wizard with shipped binary pending (open tech-debt item)"
   - "baseline ~/.config/tobii.json md5: 771f74bc78f424a327b7480df0dff7fee"

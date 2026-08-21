@@ -5,17 +5,22 @@ WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-r
 
 GOALS:
   - completed: "v0.1.1 shipped (EDID auto-detect, pre-curve deadzone, adaptive eye ratio)"
-  - active: "docs tree + documentation for existing repo (this session)"
-  - pending: "v0.2.0 calibration-wizard release (re-test -> QA -> commit/tag/push -> GitHub release)"
+  - completed: "docs tree + documentation for existing repo (commit 6c9070a)"
+  - completed: "v0.2.0 calibration-wizard release (QA PASS -> security PASS -> commit bf2bf2c -> tag/push -> GitHub release)"
+  - active: "plan + execute eye-tracking accuracy fix (center gaze y≈0.19-0.21 vs ~0.5; eye z≈670-683mm vs ~510mm expected; eye y≈-99mm)"
+  - pending: "memory-bank status sync commit (release.yaml done on disk, calibration-wizard.yaml + session.yaml being updated now)"
 
 RUNTIME_STATE:
-  bridge: "/tmp/zig-out-opentrack-gui22/bin/tobii-opentrack --port 4242 --verbose, connected, streaming UDP 4242"
+  bridge: "/tmp/zig-out-opentrack-gui22/bin/tobiifree-opentrack --port 4242 --verbose, connected, streaming UDP 4242"
   daemon: "PID 13974, --force-display-area, user-started this session"
   logs: "/tmp/gui-trace-testing.log (bridge trace), /tmp/tobifreedot.log (daemon)"
+  tobii_json: "~/.config/tobii.json baseline md5 771f74bc78f424a327b7480df0dff7fee"
 
 NEXT_STEPS:
-  1. "Wizard re-test with retry-fix binary (pending user confirmation)"
-  2. "qa-tester gate: zig build test"
-  3. "librarian: commit v0.2.0, tag, push"
-  4. "gh release create v0.2.0"
-  5. "Keep .docs/tech-debt.yaml items updated through the release"
+  1. "Commit + push memory-bank docs sync (release.yaml / calibration-wizard.yaml / session.yaml)"
+  2. "Eye-tracking diagnosis: read ~/.config/tobii.json + daemon display-area log; dump raw core.GazeSample (normalized 2D gaze + eye origin) at known look points"
+  3. "Decide fix locus: display-area geometry transform vs calibration blob quality vs wizard capture (tech-debt has the candidate items)"
+  4. "Log findings to .docs/tech-debt.yaml, then plan fix"
+
+NOTE:
+  - "Re-test of 5-point wizard with shipped binary: still pending user confirmation (open tech-debt item, not blocking v0.2.0 release)"

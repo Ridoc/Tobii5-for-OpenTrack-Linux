@@ -5,25 +5,28 @@ BRANCH: "main"
 
 TAGS:
   v0.1.0: "released"
-  v0.1.1: "released (commit f6bc2e2, tag + push done; GitHub release created at /releases/tag/v0.1.1)"
+  v0.1.1: "released (commit f6bc2e2, tag + push done; GitHub release created)"
+  v0.2.0: "released (commit bf2bf2c, tag + push done; GitHub release created)"
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
+  v0.2.0: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.2.0"
 
-UNRELEASED_WORK (v0.2.0, working tree, uncommitted):
-  - "calibration wizard (applications/tobiifree-opentrack/src/calibration.zig)"
-  - "wizard integration + threading/redraw/crash fixes (main.zig)"
-  - "blob round-trip via onDaemonResponse -> cal_apply"
-  - "retry-fix for corner capture (MIN_VALID_PER_POINT=15 / MAX_POINT_RETRIES=3, same-point retry)"
-  - "save_to_file PathAlreadyExists fix (display_area_config.zig)"
-  - "socket sendCommand 16KiB buffer + failure logging (socket_source.zig)"
-  - "README.md wizard usage docs"
+SHIPPED_IN_V0.2.0:
+  - "calibration wizard (applications/tobiifree-opentrack/src/calibration.zig) + GUI integration (main.zig)"
+  - "per-point retry with quality gates (MIN_VALID_PER_POINT=15 / MAX_POINT_RETRIES=3, same-point retry)"
+  - "calibration blob round-trip via onDaemonResponse -> cal_apply"
+  - "correct 16-byte f64 (x,y) add_calibration_point payload"
+  - "threading safety: mutex, main-thread redraws, g_idle_add teardown, 4s reply timeout"
+  - "crash fixes: NUL-terminated cairo strings, Space keysym, key controller on toplevel, calFeedGaze before validity gate"
+  - "save_to_file PathAlreadyExists idempotency (display_area_config.zig)"
+  - "sendCommand 8 KiB payload buffer + failure logging (socket_source.zig)"
+  - "docs: .docs/ memory bank, CHANGELOG.md, docs/README.md index, README wizard docs"
 
-PENDING_RELEASE_PIPELINE (v0.2.0):
-  1. "qa-tester gate: zig build test"
-  2. "security-reviewer on changed files (socket_source/display_area_config main.zig)"
-  3. "librarian commit + tag + push v0.2.0"
-  4. "gh release create"
+PIPELINE_COMPLETED_V0.2.0:
+  - "qa gate: driver zig build test PASS; bridge + daemon ReleaseSafe builds PASS"
+  - "security review PASS (1 low note: predictable ~/.config/tobii.json path — logged to tech-debt)"
+  - "commits: 6c9070a (docs) + bf2bf2c (code), tag v0.2.0, pushed, gh release created"
 
 HISTORY_NOTES:
-  - "Branch has 38 commits; initial commit 276b34a; frequent tuning commits after; aetherial 'option A: hold rotation on single eye' lineage (kill snap-back counter-move)."
+  - "Branch has 38 commits through v0.1.1 + 2 more for v0.2.0 arc (docs + code)."
