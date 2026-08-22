@@ -1,0 +1,41 @@
+# L2_LEAF — TobiiArgus branding
+VERSION: "0.2.2"
+UPDATED: "2026-08-22"
+
+IDENTITY:
+  NAME: "TobiiArgus"                # canonical display name (searchable 'Tobii')
+  ICON_SLUG: "tobiiargus"           # freedesktop icon name ^[a-z0-9-]+$
+  TAGLINE: "Tobii Eye Tracker 5 → OpenTrack for Linux"
+  STORY: "Argus = all-seeing hundred-eyed watchman; an eye tracker that never blinks."
+  DISCLAIMER: "Unofficial community project — not affiliated with or endorsed by Tobii AB."
+
+SCOPE_LOCK:
+  UNCHANGED_BINARIES: ["tobiifreedot", "tobiifree-opentrack"]
+  BASELINE: "v0.2.1_fix — driver/protocol/tracking code byte-frozen; branding delta only."
+
+ASSETS:
+  MASTER_SVG: "assets/brand/tobiiargus.svg"
+  AVATAR_SVG: "assets/brand/tobiiargus-avatar.svg"
+  BANNER_SVG: "assets/brand/tobiiargus-banner.svg"
+  HICOLOR_PNGS: "assets/icons/hicolor/{16..512}x*/apps/tobiiargus.png"
+  SCALABLE_SVG: "assets/icons/hicolor/scalable/apps/tobiiargus.svg"
+  ICO: "assets/brand/dist/tobiiargus.ico"
+
+DESIGN:
+  STYLE: "flat geometric"
+  PALETTE:
+    TILE: "#16181D"
+    IRIS_YELLOW: "#FFC331"
+    IRIS_ORANGE: "#F5890B"
+    SCLERA: "#FFFFFF"
+  MOTIF: "almond eye, 8-wedge radial iris fan (Argus hundred-eyes), specular dot"
+
+PIPELINE:
+  EXPORTER: "scripts/export-brand-assets.mjs"
+  RENDERERS: ["rsvg-convert", "inkscape", "magick"]   # fallback chain
+  NFS_QUIRK: "use read+write instead of copyfile(2); zig install needs manual binary copy"
+
+INTEGRATION:
+  GTK_WIRING: "gtk_window_set_icon_name(win,'tobiiargus') on main window + calibration window"
+  DESKTOP_FILE: "assets/applications/tobiiargus.desktop (desktop-file-validate clean)"
+  INSTALL_RECIPE: "just install-icons -> ~/.local/share/{icons/hicolor,applications}"

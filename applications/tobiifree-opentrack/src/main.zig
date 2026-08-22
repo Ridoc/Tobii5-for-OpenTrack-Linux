@@ -806,7 +806,8 @@ fn onCalibrateClicked(_: [*c]c.GtkButton, _: ?*anyopaque) callconv(.c) void {
 fn openCalWindow() void {
     const win = c.gtk_window_new();
     g_cal_window = @ptrCast(win);
-    c.gtk_window_set_title(@ptrCast(win), "Calibration");
+    c.gtk_window_set_title(@ptrCast(win), "Calibration — TobiiArgus");
+    c.gtk_window_set_icon_name(@ptrCast(win), "tobiiargus");
     c.gtk_window_set_default_size(@ptrCast(win), 1920, 1080);
     c.gtk_window_fullscreen(@ptrCast(win));
 
@@ -1231,7 +1232,8 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
 
     const window = c.gtk_application_window_new(@ptrCast(app));
     g_window = @ptrCast(window);
-    c.gtk_window_set_title(@ptrCast(window), "Tobii → OpenTrack");
+    c.gtk_window_set_title(@ptrCast(window), "TobiiArgus — Tobii → OpenTrack");
+    c.gtk_window_set_icon_name(@ptrCast(window), "tobiiargus");
     c.gtk_window_set_default_size(@ptrCast(window), 1024, 780);
 
     // CSS: monospace values.

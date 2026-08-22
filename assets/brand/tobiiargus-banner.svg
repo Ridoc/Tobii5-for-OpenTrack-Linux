@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TobiiArgus — wide banner lockup (README/repo art).
+  Mark + wordmark + tagline on dark tile. 4:1 aspect ratio.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 256" width="1024" height="256">
+  <title>TobiiArgus — Tobii Eye Tracker 5 to OpenTrack for Linux</title>
+
+  <!-- Banner background -->
+  <rect width="1024" height="256" rx="40" ry="40" fill="#16181D"/>
+
+  <!-- ===== Mark (scaled copy of the app icon artwork) ===== -->
+  <g transform="translate(28 28) scale(0.390625)">
+    <defs>
+      <path id="eye-b" d="M 81 256 C 160 160, 352 160, 431 256 C 352 352, 160 352, 81 256 Z"/>
+      <clipPath id="eye-clip-b">
+        <use href="#eye-b"/>
+      </clipPath>
+    </defs>
+    <rect width="512" height="512" rx="80" ry="80" fill="#16181D"/>
+    <use href="#eye-b" fill="#FFFFFF"/>
+    <g clip-path="url(#eye-clip-b)">
+      <path d="M 256 256 L 356 256 A 100 100 0 0 1 326.71 326.71 Z" fill="#FFC331"/>
+      <path d="M 256 256 L 326.71 326.71 A 100 100 0 0 1 256 356 Z" fill="#F5890B"/>
+      <path d="M 256 256 L 256 356 A 100 100 0 0 1 185.29 326.71 Z" fill="#FFC331"/>
+      <path d="M 256 256 L 185.29 326.71 A 100 100 0 0 1 156 256 Z" fill="#F5890B"/>
+      <path d="M 256 256 L 156 256 A 100 100 0 0 1 185.29 185.29 Z" fill="#FFC331"/>
+      <path d="M 256 256 L 185.29 185.29 A 100 100 0 0 1 256 156 Z" fill="#F5890B"/>
+      <path d="M 256 256 L 256 156 A 100 100 0 0 1 326.71 185.29 Z" fill="#FFC331"/>
+      <path d="M 256 256 L 326.71 185.29 A 100 100 0 0 1 356 256 Z" fill="#F5890B"/>
+    </g>
+    <circle cx="256" cy="256" r="42" fill="#16181D"/>
+    <circle cx="234" cy="234" r="14" fill="#FFFFFF"/>
+  </g>
+
+  <!-- ===== Wordmark ===== -->
+  <text x="264" y="122"
+        font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="68" font-weight="800" letter-spacing="3"
+        fill="#FFFFFF">TOBII<tspan fill="#F5890B">ARGUS</tspan></text>
+
+  <!-- Tagline -->
+  <text x="267" y="166"
+        font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="23" font-weight="500" letter-spacing="0.5"
+        fill="#B9BFC9">Tobii Eye Tracker 5 &#8594; OpenTrack for Linux</text>
+
+  <!-- Accent underline -->
+  <rect x="267" y="182" width="180" height="5" rx="2.5" fill="#FFC331"/>
+</svg>

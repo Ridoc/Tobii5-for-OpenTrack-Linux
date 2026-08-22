@@ -39,6 +39,24 @@ bundle: wasm
 install:
     npm install
 
+# Install TobiiArgus icon theme files + .desktop launcher into the user's
+# XDG data dir (~/.local/share). No root required.
+install-icons:
+    #!/usr/bin/env bash
+    data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    mkdir -p "$data/icons" "$data/applications"
+    cp -r assets/icons/hicolor "$data/icons/"
+    cp assets/applications/tobiiargus.desktop "$data/applications/"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$data/applications"
+    fi
+    if command -v gtk4-update-icon-cache >/dev/null 2>&1; then
+        gtk4-update-icon-cache -f -t "$data/icons/hicolor" || true
+    elif command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t "$data/icons/hicolor" || true
+    fi
+    echo "installed: $data/icons/hicolor + $data/applications/tobiiargus.desktop"
+
 # Typecheck the SDK
 typecheck-sdk:
     cd sdk && npx tsc --noEmit

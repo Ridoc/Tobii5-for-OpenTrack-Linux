@@ -1,9 +1,18 @@
-# Tobii Eye Tracker 5 → OpenTrack for Linux games (X4: Foundations, flight sims, racing & more)
+# TobiiArgus — Tobii Eye Tracker 5 → OpenTrack for Linux games (X4: Foundations, flight sims, racing & more)
 
-Make a **Tobii Eye Tracker 5** drive head-look camera in **any game with
-OpenTrack/FreeTrack support** on Linux — **X4: Foundations** (native Linux build)
-included. The cockpit camera follows where you look, powered by the tracker's
-gaze + eye-origin data, streamed over the standard OpenTrack UDP protocol.
+<p align="center">
+  <img src="assets/brand/dist/banner.png" alt="TobiiArgus logo — stylized eye with a yellow-orange segmented iris on a dark rounded tile; wordmark TOBIIARGUS with tagline: Tobii Eye Tracker 5 → OpenTrack for Linux" width="720">
+</p>
+
+> [!NOTE]
+> Unofficial community project — not affiliated with or endorsed by Tobii AB.
+> "Tobii" is used solely to describe hardware compatibility.
+
+**TobiiArgus** makes a **Tobii Eye Tracker 5** drive head-look camera in
+**any game with OpenTrack/FreeTrack support** on Linux — **X4: Foundations**
+(native Linux build) included. The cockpit camera follows where you look,
+powered by the tracker's gaze + eye-origin data, streamed over the standard
+OpenTrack UDP protocol.
 
 ```
 Tobii ET5 (USB)

@@ -4,6 +4,31 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [v0.2.2] — TobiiArgus branding (2026-08-22)
+
+Product identity: the project is now named **TobiiArgus** (Argus, the all-
+seeing watchman — an eye tracker that never blinks). Internal binary and
+package names (`tobiifreedot`, `tobiifree-opentrack`) are unchanged. No
+changes to driver, protocol, or tracking code relative to v0.2.1_fix.
+
+### Added
+- **Logo & brand assets** (`assets/brand/`): flat geometric Argus-eye mark
+  (8-wedge Tux yellow/orange iris fan on a near-black tile), square avatar
+  variant, wide banner lockup with wordmark + tagline.
+- **Icon set** (`assets/icons/hicolor/`, 16–512 px PNGs + scalable SVG,
+  multi-res `assets/brand/dist/tobiiargus.ico`) rendered by
+  `scripts/export-brand-assets.mjs` (rsvg-convert/inkscape/magick fallback).
+- **Desktop launcher** (`assets/applications/tobiiargus.desktop`; passes
+  `desktop-file-validate`) + `just install-icons` recipe that installs the
+  hicolor icons and launcher into `~/.local/share` (no root needed).
+
+### Changed
+- **GTK windows now show the TobiiArgus icon** in title bar/taskbar via
+  `gtk_window_set_icon_name()` on both the main window and the calibration
+  wizard; window titles rebranded ("TobiiArgus — Tobii → OpenTrack",
+  "Calibration — TobiiArgus").
+- README: TobiiArgus banner + naming + non-affiliation disclaimer.
+
 ## [Unreleased] — v0.2.0 (calibration wizard)
 
 On-screen calibration wizard, built into the bridge GUI.

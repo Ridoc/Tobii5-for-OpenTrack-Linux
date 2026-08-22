@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TobiiArgus — square avatar variant (GitHub/repo art).
+  Full-bleed background, no rounded corners: host sites crop avatars
+  to circles themselves. Tighter crop than the app icon so the eye fills the frame.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="40 40 432 432" width="512" height="512">
+  <title>TobiiArgus avatar</title>
+  <defs>
+    <path id="eye" d="M 81 256 C 160 160, 352 160, 431 256 C 352 352, 160 352, 81 256 Z"/>
+    <clipPath id="eye-clip">
+      <use href="#eye"/>
+    </clipPath>
+  </defs>
+
+  <!-- Full-bleed tile -->
+  <rect x="40" y="40" width="432" height="432" fill="#16181D"/>
+
+  <!-- Sclera -->
+  <use href="#eye" fill="#FFFFFF"/>
+
+  <!-- Iris: 8 radial wedges alternating Tux yellow / orange -->
+  <g clip-path="url(#eye-clip)">
+    <path d="M 256 256 L 356 256 A 100 100 0 0 1 326.71 326.71 Z" fill="#FFC331"/>
+    <path d="M 256 256 L 326.71 326.71 A 100 100 0 0 1 256 356 Z" fill="#F5890B"/>
+    <path d="M 256 256 L 256 356 A 100 100 0 0 1 185.29 326.71 Z" fill="#FFC331"/>
+    <path d="M 256 256 L 185.29 326.71 A 100 100 0 0 1 156 256 Z" fill="#F5890B"/>
+    <path d="M 256 256 L 156 256 A 100 100 0 0 1 185.29 185.29 Z" fill="#FFC331"/>
+    <path d="M 256 256 L 185.29 185.29 A 100 100 0 0 1 256 156 Z" fill="#F5890B"/>
+    <path d="M 256 256 L 256 156 A 100 100 0 0 1 326.71 185.29 Z" fill="#FFC331"/>
+    <path d="M 256 256 L 326.71 185.29 A 100 100 0 0 1 356 256 Z" fill="#F5890B"/>
+  </g>
+
+  <!-- Pupil + specular highlight -->
+  <circle cx="256" cy="256" r="42" fill="#16181D"/>
+  <circle cx="234" cy="234" r="14" fill="#FFFFFF"/>
+</svg>

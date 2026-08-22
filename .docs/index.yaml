@@ -1,7 +1,7 @@
 # L0_ROUTER — TobiiForX4Linux memory bank
 # O(1) direct lookup: route by domain → leaf spec.
 VERSION: "1.0"
-PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux"
+PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux (TobiiArgus)"
 UPDATED: "2026-08-21"
 
 PATH_ROUTES:
@@ -24,6 +24,7 @@ CONCEPT_ROUTES:
   PROTOCOL: ".docs/protocol.yaml"
   BRIDGE_PIPELINE: ".docs/bridge-pipeline.yaml"
   CALIBRATION_WIZARD: ".docs/calibration-wizard.yaml"
+  BRANDING: ".docs/branding.yaml"
   RELEASE: ".docs/release.yaml"
   TECH_DEBT: ".docs/tech-debt.yaml"
   SESSION: ".docs/session.yaml"

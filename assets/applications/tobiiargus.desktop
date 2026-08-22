@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=TobiiArgus
+GenericName=Eye Tracking Head Look
+Comment=Bridge a Tobii Eye Tracker 5 to OpenTrack UDP on Linux — head-look for X4: Foundations, flight sims, racing games
+Exec=tobiifree-opentrack
+Icon=tobiiargus
+Terminal=false
+Categories=Game;Utility;
+Keywords=tobii;eye tracker;opentrack;freetrack;head tracking;linux;gaming;x4;simulator;
+StartupNotify=true
+# Unofficial community project — not affiliated with or endorsed by Tobii AB.
