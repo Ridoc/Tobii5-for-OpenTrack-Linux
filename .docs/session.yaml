@@ -16,22 +16,25 @@ GOALS:
   - completed: "Phase 3: verify capture (center + bottom_edge re-verify, UDP 48 B on 4242, X4 Connected) -- REQUIRES USER AT SCREEN (300-sample eye-origin dump = 0 valid frames while away)"
   - completed: "v0.2.2 E2E test: QA PASS, daemon OK, bridge GUI OK, UDP OK, wizard OK (with fixes), emulated-note added"
   - completed: "v0.2.2 fixes: gaze-viz-affine-fix, cal-window-180, cal-points-inset, emulated-headtracking-note, old-presets-deleted"
-  - pending: "Commit v0.2.2 fixes (.docs/*, calibration.zig, main.zig) + tag v0.2.2-fixer (no GitHub release)"
+  - completed: "v0.2.3 tagged (commit 75ce1a4): E2E test fixes published"
+  - completed: "Post-v0.2.3: display_area reverted to working geometry (cy=-155) after wizard overwrote it; affine correction restored; old presets purged"
   - pending: "Investigate: calibration capture fails at extreme corners despite valid ET5 eye tracking (cal-point-inset workaround applied)"
+  - pending: "Investigate: eye viz shows false-positive validity=4 for second eye at upper edge (viz-eye-validity-false-positive)"
+  - pending: "UI: cal progress indicator — green circular fill on dot instead of centered counter (cal-progress-ui)"
+  - pending: "Investigate: Squad/Proton UDP path (bridge on host localhost vs game in Wine namespace)"
 
 RUNTIME_STATE:
-  bridge: "PID 74745, applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack --port 4242 --verbose, ReleaseSafe, rpath-resolved, connects + streams daemon"
-  daemon: "PID 67654, applications/tobiifreed/zig-out/bin/tobiifreedot --force-display-area, /tmp/opencode/daemon-v022.log; socket /run/user/1000/tobiifreedot/gaze.sock"
-  logs: "/tmp/opencode/daemon-v022.log (daemon trace), /tmp/opencode/bridge-v022.log (bridge trace + calibration), /tmp/opencode/udp_listen.py (UDP 4242 counter)"
-  tobii_json: "~/.config/tobii.json display_area updated by calibration wizard (md5 398df2c79ae9a68019999cfd8f635910)"
+  bridge: "PID 124225, applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack --port 4242 --verbose, ReleaseSafe, rpath-resolved"
+  daemon: "PID 124154, applications/tobiifreed/zig-out/bin/tobiifreedot --force-display-area, /tmp/opencode/daemon-v022.log; socket /run/user/1000/tobiifreedot/gaze.sock; display_area origin=(-400,-10)"
+  logs: "/tmp/opencode/daemon-v022.log, /tmp/opencode/bridge-v022.log (5-min logging active)"
+  tobii_json: "~/.config/tobii.json display_area cy=-155 (reverted to working geometry)"
   qa_gate: "driver zig build test PASS via bash ~/.config/opencode/skills/test-scrubber.sh/test-scrubber.sh"
 
 NEXT_STEPS:
-  1. "Commit v0.2.2 fixes: .docs/*, calibration.zig (cal-window-180, cal-points-inset), main.zig (viz-affine-fix, emulated-note)"
-  2. "Tag v0.2.2-fixer (no GitHub release)"
-  3. "Investigate: calibration capture fails at extreme corners despite valid ET5 eye tracking"
-  4. "Optional: add 'just install-local' recipe automating build->copy->stamp flow"
-  5. "Optional: GUI UI improvement — cal progress indicator (green circle/dot below active point) instead of mid-screen counter"
+  1. "Investigate: calibration capture fails at extreme corners despite valid ET5 eye tracking"
+  2. "Investigate: eye viz false-positive validity=4 for second eye at upper edge"
+  3. "UI: cal progress indicator — green circular fill on dot instead of centered counter"
+  4. "Investigate: Squad/Proton UDP path — bridge on host 127.0.0.1:4242 vs game in Wine namespace"
 
 NOTE:
   - "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles 'Calibration — TobiiArgus', justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded from v0.2.1_fix."

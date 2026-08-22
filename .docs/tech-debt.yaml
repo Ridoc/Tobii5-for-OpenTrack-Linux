@@ -71,3 +71,7 @@ ITEMS:
     severity: "medium"
     status: "open"
     detail: "Calibration wizard shows capture counter (e.g. '120/180') as centered text that disrupts calibration focus. User requests: (a) move counter below the active calibration dot, OR (b) make the dot itself gradually turn green as a clockwise progress indicator. Text in center of screen must be removed."
+  - id: "squad-proton-udp-path"
+    severity: "medium"
+    status: "open"
+    detail: "Squad runs via Proton (Wine namespace). Bridge sends UDP to host 127.0.0.1:4242 but game is in isolated network namespace. Need to verify if Proton exposes host localhost or requires bridge to bind to specific interface. 'Last build worked' suggests previous config handled this — investigate what changed."
