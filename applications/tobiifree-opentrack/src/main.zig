@@ -1420,6 +1420,8 @@ fn usage() void {
         \\  --neck <cm>          neck-pivot distance (default {d:.0})
         \\  --gaze-scale <deg>   gaze → yaw at screen edge (default {d:.0})
         \\  --gaze-scale-pitch <deg> gaze → pitch at screen edge (default {d:.0})
+        \\  --gaze-y-offset <n>   error-map gaze-y offset, y=(raw+off)/scale (default {d:.3})
+        \\  --gaze-y-scale <n>    error-map gaze-y scale, >=0.1 (default {d:.3})
         \\  --curve <linear|power|tobii> response curve (default tobii)
         \\  --curve-exp <0.2..3> power-curve exponent (default {d:.2})
         \\  --flip-yaw           invert head yaw direction
@@ -1445,6 +1447,8 @@ fn usage() void {
         tobii.BUILTIN_PRESETS[0].neck,
         tobii.BUILTIN_PRESETS[0].gaze_scale,
         tobii.BUILTIN_PRESETS[0].gaze_scale_pitch,
+        tobii.BUILTIN_PRESETS[0].gaze_y_offset,
+        tobii.BUILTIN_PRESETS[0].gaze_y_scale,
         tobii.BUILTIN_PRESETS[0].curve_exp,
     });
 }
@@ -1539,6 +1543,16 @@ fn parseArgs() void {
             };
         } else if (std.mem.eql(u8, arg, "--gaze-scale-pitch")) {
             g_opts.p.gaze_scale_pitch = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
+                usage();
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--gaze-y-offset")) {
+            g_opts.p.gaze_y_offset = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
+                usage();
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--gaze-y-scale")) {
+            g_opts.p.gaze_y_scale = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
                 usage();
                 std.process.exit(2);
             };

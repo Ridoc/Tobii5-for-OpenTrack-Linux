@@ -221,10 +221,15 @@ pub const Calibrator = struct {
         const half_h = screen_h_mm / 2.0;
 
         // NOTE: eye-origin z is tracker-space (~400–900 mm viewing distance),
-        // NOT sensor→screen-plane distance. Until that transform is solved
-        // (Phase 3), keep the known-good clip-mount default when the reading
-        // falls outside the plausible display-plane band — persisting raw
-        // eye z would regress the working geometry (viz verified at z=65).
+        // NOT sensor→screen-plane distance. v0.2.1 tested the "plane geometry
+        // mismatch" hypothesis against the 11-point error map and FALSIFIED it:
+        // no eye position + plane (z0, tilt) explains the device readings
+        // (concurrency fit residual 44–85 mm on the reliable points; the
+        // only y-consistent solutions put the eye at z≈90 mm). The device's
+        // gaze-y estimation itself is biased (grows with elevation; top 31%
+        // of the screen unreadable). The fitted correction lives in the
+        // bridge preset (gaze_y_offset / gaze_y_scale) — the plane stays at
+        // the verified clip-mount default. Keep z_used's band guard below.
         const z_used = if (z_mm > 10 and z_mm < 200) z_mm else 65;
         if (z_used != z_mm) {
             log.info("eye z {d:.0}mm outside display-plane band — using clip-mount default 65mm", .{z_mm});

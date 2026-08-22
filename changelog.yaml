@@ -1,0 +1,43 @@
+PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux"[cite: 9]
+FORMAT: "CHANGELOG"
+
+RELEASES:
+  v0.2.0:
+    status: "unreleased"[cite: 9]
+    theme: "calibration wizard"[cite: 9]
+    added:
+      - "Calibration wizard: 5-point, Cairo GUI, integrated GTK button"[cite: 9]
+      - "Quality gates: MIN_VALID_PER_POINT=15, MAX_POINT_RETRIES=3 (same-point retry)"[cite: 9]
+      - "Blob round-trip: finish_calibration -> Srv.response -> cal_apply"[cite: 9]
+    fixed:
+      - "add_calibration_point payload: 16B (2x f64), dropped eye_choice"[cite: 9]
+      - "Thread safety: mutex guard, onTick redraws, g_idle_add teardown, 4s calWaitTimeout"[cite: 9]
+      - "Crashes: NUL-terminated strings, keysym 0x20, key controller, calFeedGaze"[cite: 9]
+      - "save_to_file PathAlreadyExists idempotency"[cite: 9]
+      - "SocketSource.sendCommand: 8KiB buffer + error logging"[cite: 9]
+    pending: ["QA gate", "manual re-test", "commit/tag/push", "GitHub release"][cite: 9]
+
+  v0.1.1:
+    date: "2026-08-21"[cite: 9]
+    theme: "EDID auto-detect, pre-curve deadzone, adaptive eye ratio"[cite: 9]
+    added:
+      - "EDID auto-detect: parses /sys/class/drm/card*-*/edid"[cite: 9]
+      - "Pre-curve deadzone: applied before response curve"[cite: 9]
+      - "Adaptive eye ratio: gaze-lead blend adapts with head motion"[cite: 9]
+    fixed:
+      - "Bridge window size: 1024x780"[cite: 9]
+      - "Gaze drift reduction: gpd 7.78deg -> ~1deg"[cite: 9]
+
+  v0.1.0:
+    date: "2026-08-21"[cite: 9]
+    theme: "First tagged release: ET5 -> X4 native OpenTrack bridge"[cite: 9]
+    added:
+      - "Tobii ET5 USB driver (fork Aetherall/tobiifree)"[cite: 9]
+      - "tobiifree-opentrack bridge: 48-byte UDP to 127.0.0.1:4242"[cite: 9]
+      - "GTK4 status window with preset system (JSON persistence)"[cite: 9]
+      - "CLI flags: tuning parameters, --no-position, --headless"[cite: 9]
+    changed:
+      - "Head rotation: interocular yaw/roll with IPD validation"[cite: 9]
+      - "Rotation holds on single eye occlusion"[cite: 9]
+      - "Absolute-interocular recenter (kills persistent offsets)"[cite: 9]
+      - "No auto-center: manual instant re-acquisition"[cite: 9]

@@ -70,6 +70,18 @@ pub const Preset = struct {
     pre_curve_dz: f64 = 0.02, // ° pre-curve deadzone (kills smoother noise before Catmull-Rom amplifies it)
     eye_ratio_core: f64 = 0.80, // eye_ratio at screen center (eyes dominate)
     core_zone_radius: f64 = 0.10, // gaze_dev radius for core zone (normalized 0–1)
+    // Phase 2A: error-map-derived gaze correction (v0.2.1). Controlled
+    // capture (2026-08-22, 11 dumps) showed the device reads gaze-y LOW by a
+    // linear map: device_y = 1.278·y_true − 0.394  →  y_true = (y_raw + 0.394)
+    // / 1.278. At center this was 0.245 instead of 0.5 — a +7.5–11.5° phantom
+    // pitch that pinned the view up all session and blocked rest-follow
+    // (window ±4°). The map was fitted on the reliable points (center×2,
+    // bottom_edge, BR, BL-y); the "plane geometry mismatch" hypothesis was
+    // tested and FALSIFIED (no eye+plane explains the readings — the device's
+    // ray estimation itself is biased, growing with gaze elevation, and the
+    // top 31% of the screen is unreadable → garbage at corners).
+    gaze_y_offset: f64 = 0.394, // additive correction: y_true = (y_raw + off)/scale
+    gaze_y_scale: f64 = 1.278, // multiplicative correction (>=0.1)
 };
 
 pub const BUILTIN_PRESETS = [_]Preset{
@@ -457,13 +469,14 @@ const YAW_PTS = [_][2]f64{
     .{ 0, 0 }, .{ 4, 30 }, .{ 12, 70 }, .{ 20, 100 }, .{ 35, 160 },
 };
 const PITCH_UP_PTS = [_][2]f64{
-    // Symmetric with DOWN: up was (10,20),(20,50),(30,90) — at ±16° input up
-    // gave +36° vs down −64°, which read as "up is weaker". Mirror the down
-    // set so both directions hit 90° at 20° of head pitch.
-    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 90 },
+    // Symmetric with DOWN. v0.2.1 B4: flattened the top end from 90° at 20°
+    // input to 50° — the eye-Y baseline bias (≥20° pre-curve) was amplified
+    // straight to the 90° ceiling, so a residual baseline now reads as a
+    // strong-but-sane pitch instead of a session-long pin.
+    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 50 },
 };
 const PITCH_DOWN_PTS = [_][2]f64{
-    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 90 },
+    .{ 0, 0 }, .{ 2, 0 }, .{ 10, 25 }, .{ 20, 50 },
 };
 
 fn catmullRom(pts: []const [2]f64, x: f64) f64 {
@@ -627,6 +640,17 @@ ref_set: bool = false,
     rest_time: f64 = 0,
     last_rest_yaw: f64 = 0,
     last_rest_pitch: f64 = 0,
+    // B1: last validated raw gaze. Garbage frames (device sentinel −1.0/−1.0,
+    // off-plane [−0.05,1.05] bounds, exact (0,0)) feed the HOLD instead of
+    // the filter, so a single bad frame can't poison the gaze EWMA, the
+    // corner-hold witness, or the rest-follow gaze-center check.
+    last_good_gaze: [2]f64 = .{ 0.5, 0.5 },
+    // B3: pitch-pin safety net. If the OUTPUT pitch is stuck at ≥19° for >2 s
+    // while the corrected gaze is at screen center, the eye-Y baseline is
+    // pinned (the old rest-follow never engaged because the biased gaze sat
+    // outside its ±4° window). Nudge the ref baseline toward the current pose
+    // at a bounded rate so the view unbinds without dragging a held pose.
+    pitch_pin_time: f64 = 0,
 
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
@@ -642,6 +666,9 @@ ref_set: bool = false,
     const rest_gaze_deg: f64 = 4.0; // AND the gaze is near screen center (both axes):
     // a held down-look (reading, taskbar) has a still head too — without this
     // check the ref crept toward the eye position and the view wandered off.
+    const pitch_pin_deg: f64 = 19.0; // B3: output pitch at/above this = pinned up/down
+    const pitch_pin_s: f64 = 2.0; // B3: pinned this long before the bounded ref nudge
+    const pitch_pin_rate: f64 = 0.05; // B3: ref blend per frame once pinned (bounded, no pop)
     const tug_smoothing: f64 = 0.85; // tug low-pass: fc_min 1.2 Hz, saccade-front ~60 ms
     const min_ipd_mm: f64 = 45.0; // biological lower bound on interocular distance
     const max_ipd_mm: f64 = 80.0; // biological upper bound (glitch detector)
@@ -802,7 +829,21 @@ ref_set: bool = false,
         }
 
         // 1. gaze → angles, heavily filtered.
-        const g = self.gaze.filter(sample.gaze_point_2d_norm, dt);
+        //    B1: validate the raw gaze before it can poison the pipeline.
+        //    The device emits -1.0/-1.0 as the no-tracking sentinel and exact
+        //    (0,0) / off-plane values on single-eye garbage frames (confirmed
+        //    in the v0.2.1 dumps). Bad frames feed the HOLD so the EWMA, the
+        //    corner-hold witness and the rest-follow gaze check never see them.
+        const g_raw = sample.gaze_point_2d_norm;
+        const g_ok = g_raw[0] >= -0.05 and g_raw[0] <= 1.05 and
+            g_raw[1] >= -0.05 and g_raw[1] <= 1.05 and
+            !(g_raw[0] == 0.0 and g_raw[1] == 0.0) and
+            !(g_raw[0] == -1.0 and g_raw[1] == -1.0);
+        if (g_ok) self.last_good_gaze = g_raw;
+        //    Phase 2A: error-map-derived correction (see Preset fields).
+        const y_scale = @max(p.gaze_y_scale, 0.1);
+        const g_corr = [2]f64{ self.last_good_gaze[0], (self.last_good_gaze[1] + p.gaze_y_offset) / y_scale };
+        const g = self.gaze.filter(g_corr, dt);
         const gaze_yaw = (g[0] - 0.5) * p.gaze_scale;
         const gaze_pitch = (0.5 - g[1]) * p.gaze_scale_pitch;
         // Tug-only low-pass: the state filter's pursuit band (α up to 0.25)
@@ -1115,6 +1156,30 @@ ref_set: bool = false,
             // The ref just moved: the interocular rel_yaw changed, so re-arm
             // last-good to avoid tripping the glitch clamp against the old
             // pose (which would freeze yaw at the pre-follow offset).
+            self.has_last_good = false;
+        }
+
+        // 3e. B3 safety net: pitch pinned at the ceiling with centered gaze.
+        //     The v0.2.1 diagnosis: the raw gaze-y bias (center reads 0.245,
+        //     not 0.5) made gaze_pitch sit outside rest-follow's ±4° window,
+        //     so the eye-Y baseline never decayed and pitch pinned at ±90°
+        //     all session. The 2A correction fixes the cause; this net covers
+        //     residual baseline errors that still leave |pitch| stuck ≥19° for
+        //     >2 s while the (corrected) gaze is at screen center. Nudge the
+        //     ref baseline toward the current pose at a bounded rate — fast
+        //     enough to unbind a stuck session, slow enough that a genuinely
+        //     held high-look or a corner stare (corner_hold) is never dragged.
+        if (@abs(pitch) >= pitch_pin_deg) {
+            self.pitch_pin_time += dt_r;
+        } else {
+            self.pitch_pin_time = 0;
+        }
+        if (self.pitch_pin_time >= pitch_pin_s and !self.corner_hold and
+            @abs(gaze_yaw) <= rest_gaze_deg and @abs(gaze_pitch) <= rest_gaze_deg)
+        {
+            const r = pitch_pin_rate * dt / 0.0111; // normalized to ~90fps
+            self.ref_mid[1] += r * (center[1] - self.ref_mid[1]);
+            // The ref moved: re-arm last-good like rest-follow does.
             self.has_last_good = false;
         }
 

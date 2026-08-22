@@ -1,0 +1,38 @@
+GOAL: "Bridge Tobii ET5 to X4: Foundations (Native Linux) via OpenTrack UDP"[cite: 11]
+
+SYSTEM_CONSTRAINTS:
+  target: "127.0.0.1:4242"[cite: 11]
+  wire_format: "48-byte UDP (6 LE doubles: X, Y, Z, Yaw, Pitch, Roll)"[cite: 11]
+  units: { translation: "cm", rotation: "degrees" }[cite: 11]
+  input: "$XDG_RUNTIME_DIR/tobiifreedot/gaze.sock (core.GazeSample)"[cite: 11]
+  limitations: "OpenTrack carries head pose only; no target-lock/gaze-driven menus"[cite: 11]
+
+EXECUTION_PHASES:
+  PHASE_1:
+    title: "Fork + Bridge Core"[cite: 11]
+    tasks:
+      - "Fork Aetherall/tobiifree (GPL-3.0)"[cite: 11]
+      - "Create applications/tobiifree-opentrack/ (main.zig, build.zig)"[cite: 11]
+      - "Connect socket -> decode GazeSample"[cite: 11]
+      - "Math Yaw: (gaze_x - 0.5) * 2 * MAX_YAW"[cite: 11]
+      - "Math Pitch: (0.5 - gaze_y) * 2 * MAX_PITCH"[cite: 11]
+      - "Math Translation: eye_origin midpoint (mm -> cm) relative to startup ref"[cite: 11]
+      - "Add CLI tuning flags (--host, --port, --yaw-gain, --pitch-gain, etc)"[cite: 11]
+  PHASE_2:
+    title: "Validation & Tuning"[cite: 11]
+    tasks:
+      - "Verify E2E X4 connection"[cite: 11]
+      - "Tune gains/deadzone/EMA (Resolved defaults: Yaw 37.5°, Pitch 22.5°)"[cite: 11]
+  PHASE_3:
+    title: "True Head Pose (Deferred)"[cite: 11]
+    tasks:
+      - "Implement IR-frame stream (0x050e) + MediaPipe head-pose pipeline"[cite: 11]
+
+VERIFICATION_GATES:
+  - [x] "zig build tobiifree-opentrack succeeds"[cite: 11]
+  - [x] "tobiifreedot streaming active / socket exists"[cite: 11]
+  - [x] "Bridge connects and decodes GazeSample"[cite: 11]
+  - [x] "UDP 48B packets observed on 4242 (~60 Hz)"[cite: 11]
+  - [ ] "X4 reads OpenTrack Support: Connected"[cite: 11]
+  - [ ] "Ctrl+T engages, Scroll Lock recenters properly"[cite: 11]
+  - [ ] "Tuning feels near-like Tobii in cockpit"[cite: 11]

@@ -1,5 +1,5 @@
 # session.yaml — current session state (last-known)
-UPDATED: "2026-08-21"
+UPDATED: "2026-08-22"
 SESSION_ID: "tobii-x4-docs"
 WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-reviewer -> librarian; skills read_skeleton + test-scrubber.sh"
 
@@ -7,20 +7,31 @@ GOALS:
   - completed: "v0.1.1 shipped (EDID auto-detect, pre-curve deadzone, adaptive eye ratio)"
   - completed: "docs tree + documentation for existing repo (commit 6c9070a)"
   - completed: "v0.2.0 calibration-wizard release (QA PASS -> security PASS -> commit bf2bf2c -> tag/push -> GitHub release)"
-  - active: "plan + execute eye-tracking accuracy fix (center gaze y≈0.19-0.21 vs ~0.5; eye z≈670-683mm vs ~510mm expected; eye y≈-99mm)"
-  - pending: "memory-bank status sync commit (release.yaml done on disk, calibration-wizard.yaml + session.yaml being updated now)"
+  - completed: "v0.2.1_fix Phase 1 diagnostics DONE: error map center y≈0.245 vs expected 0.5; BL x=0.50 (expected 0.05); top row garbage; single-eye invalid frames (-1,-1, validity=4, origins 0.0)"
+  - completed: "Plane-geometry hypothesis FALSIFIED (true-ray model dead; concurrency fit residual 44-85mm; no plane+eye explains readings; device gaze estimation itself biased)"
+  - completed: "Phase 2A: bridge-side affine gaze-y correction y=(raw+0.394)/1.278 (fitted on center x2, bottom_edge, BR, BL-y; zeroes center 0.245->0.5 and bottom)"
+  - completed: "Phase 2B B1-B4: B1 invalid-frame validate + HOLD(last_good_gaze); B2 auto via corrected gaze; B3 pitch-pin safety net (|pitch|>=19deg >2s + !corner_hold + centered -> ref_mid nudge); B4 PITCH_UP/DOWN curves flattened (was {20,90})"
+  - completed: "main.zig CLI --gaze-y-offset/--gaze-y-scale (separated from concurrent TobiiArgus title edits; main.zig diff is +14 mine-only)"
+  - completed: "Clean rebuild PASS: /tmp/zig-out-opentrack-v021/bin/tobiifree-opentrack (3,204,256 B, ReleaseSafe)"
+  - active: "Phase 3: verify capture (center + bottom_edge re-verify, UDP 48 B on 4242, X4 Connected) -- REQUIRES USER AT SCREEN (300-sample eye-origin dump = 0 valid frames while away)"
+  - pending: "Docs: update .docs/tech-debt.yaml (mark cal-center-offset resolved + B1-B4 items) then commit mine-only files (.docs/*, calibration.zig, main.zig, tobii_filter.zig) + tag v0.2.1_fix (no GitHub release)"
 
 RUNTIME_STATE:
-  bridge: "/tmp/zig-out-opentrack-gui22/bin/tobiifree-opentrack --port 4242 --verbose, connected, streaming UDP 4242"
-  daemon: "PID 13974, --force-display-area, user-started this session"
-  logs: "/tmp/gui-trace-testing.log (bridge trace), /tmp/tobifreedot.log (daemon)"
-  tobii_json: "~/.config/tobii.json baseline md5 771f74bc78f424a327b7480df0dff7fee"
+  bridge: "/tmp/zig-out-opentrack-v021/bin/tobiifree-opentrack --port 4242 --verbose, rebuilt ReleaseSafe 07:42, connects + streams daemon; no UDP without eyes (expected)"
+  daemon: "PID 32445, --force-display-area, /tmp/opencode/daemon3.log; socket /run/user/1000/tobiifreedot/gaze.sock; 392 B wire struct gate"
+  logs: "/tmp/opencode/daemon3.log (daemon trace, clean plane corners), /tmp/opencode/udp_listen.py (UDP 4242 counter for E2E when user present)"
+  tobii_json: "~/.config/tobii.json display_area w_mm=800 h_mm=330 z_mm=65 tilt=12.0 cx=0.0 cy=-155.0 (verified against daemon3.log plane corners TL(-400,313,134) TR(400,313,134) BL(-400,-10,65))"
+  dump_tool: "/tmp/gaze-dump-out/bin/gaze_dump (392 B gate, summary)"
+  qa_gate: "driver zig build test PASS via bash ~/.config/opencode/skills/test-scrubber.sh/test-scrubber.sh"
 
 NEXT_STEPS:
-  1. "Commit + push memory-bank docs sync (release.yaml / calibration-wizard.yaml / session.yaml)"
-  2. "Eye-tracking diagnosis: read ~/.config/tobii.json + daemon display-area log; dump raw core.GazeSample (normalized 2D gaze + eye origin) at known look points"
-  3. "Decide fix locus: display-area geometry transform vs calibration blob quality vs wizard capture (tech-debt has the candidate items)"
-  4. "Log findings to .docs/tech-debt.yaml, then plan fix"
+  1. "User sits at screen -> verify capture: center (expect ~0.5,~0.5), bottom_edge (expect ~0.5,~0.80), UDP 48 B on 4242, X4 Connected"
+  2. "Log findings to .docs/tech-debt.yaml (mark cal-center-offset resolved: falsification + affine correction; add B1-B4 items)"
+  3. "Commit mine-only files (.docs/*, calibration.zig, main.zig, tobii_filter.zig); DO NOT include assets/, justfile, scripts/export-brand-assets.mjs (concurrent TobiiArgus work)"
+  4. "Tag v0.2.1_fix (no GitHub release)"
 
 NOTE:
-  - "Re-test of 5-point wizard with shipped binary: still pending user confirmation (open tech-debt item, not blocking v0.2.0 release)"
+  - "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles 'Calibration — TobiiArgus', justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded from v0.2.1_fix."
+  - "Plane-geometry hypothesis FALSIFIED: no eye position + plane (z0, tilt) explains device readings; free-tilt solutions absurd (tilt 32-39deg, eye z 330-350mm) and fail BR-x by 366-587mm. Device gaze estimation itself biased (center 86mm low, bottom ~45mm low, top 31% unreadable)."
+  - "Bridge sends no UDP when no eyes tracked (early return before sendPacket)."
+  - "Eye origin no longer needed for plane fit (falsified); center/bottom re-verify captures need user."

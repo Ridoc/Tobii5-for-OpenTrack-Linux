@@ -1,0 +1,56 @@
+TOPOLOGY:
+  DIRECT: "ET5 -> UsbSource (has Tracker)"[cite: 10]
+  DAEMONIZED: "ET5 -> tobiifreedot (has Tracker) -> [WsSource | SocketSource]"[cite: 10]
+
+API_CONTRACTS:
+  typescript_source: |
+    interface Source {
+      subscribeToGaze(listener: (s: GazeSample) => void): Unsubscribe;
+      getDisplayArea(): Promise<DisplayArea>;
+      setDisplayArea(rect: DisplayRect): Promise<void>;
+      setDisplayAreaCorners(area: DisplayArea): Promise<void>;
+      getCalibrationStimulusPoints(): Promise<Uint8Array>;
+      calAddPoint(x: number, y: number, eyeChoice?: number): Promise<Uint8Array>;
+      calComputeAndApply(): Promise<Uint8Array>;
+      calRetrieve(): Promise<Uint8Array>;
+      calApply(blob: Uint8Array): Promise<void>;
+      closeRealm(realmId: number): Promise<void>;
+      close(): Promise<void>;
+    }[cite: 10]
+
+  zig_tracker: |
+    pub const Tracker = struct {
+        send_fn: *const fn ([]const u8) bool,
+        recv_fn: *const fn ([]u8) ?usize,
+        pub fn init(opts: InitOptions) !Tracker;
+        pub fn poll(self: *Tracker) void;
+        pub fn onGaze(self: *Tracker, cb: GazeFn) void;
+        pub fn deinit(self: *Tracker) void;
+    };[cite: 10]
+
+DAEMON_PROTOCOL:
+  framing: "[u8 msg_type] [u32 LE payload_len] [payload...]"[cite: 10]
+  cmd_client_to_daemon:
+    0x01: "subscribe"[cite: 10]
+    0x02: "get_display_area"[cite: 10]
+    0x03: "set_display_area (5xf64)"[cite: 10]
+    0x04: "set_display_area_corners (9xf64)"[cite: 10]
+    0x10: "query_realm"[cite: 10]
+    0x11: "open_realm"[cite: 10]
+    0x12: "realm_response"[cite: 10]
+    0x13: "close_realm"[cite: 10]
+    0x20: "cal_stimulus"[cite: 10]
+    0x21: "cal_add_point (x:f64, y:f64, eye_choice:u32)"[cite: 10]
+    0x22: "cal_compute"[cite: 10]
+    0x23: "cal_retrieve"[cite: 10]
+    0x24: "cal_apply (blob)"[cite: 10]
+    0xFF: "disconnect"[cite: 10]
+  srv_daemon_to_client:
+    0x01: "gaze (GazeSample 232B)"[cite: 10]
+    0x02: "response"[cite: 10]
+    0x03: "display_area (9xf64)"[cite: 10]
+    0xFF: "err (u32)"[cite: 10]
+
+STATUS_MATRIX:
+  COMPLETED: ["UsbSource (TS)", "SocketSource (Zig)", "WsServer (daemon)", "Daemon command forwarding"][cite: 10]
+  PENDING: ["TS Tracker -> Source refactor", "WsSource (TS)", "SocketSource full protocol", "Tobii.createSession() returns Source"][cite: 10]
