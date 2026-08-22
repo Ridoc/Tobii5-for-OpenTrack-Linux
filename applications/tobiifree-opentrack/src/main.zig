@@ -382,12 +382,17 @@ fn onGaze(sample: *const core.GazeSample) void {
     const out = g_pipeline.process(sample, &g_stream_preset, dt);
     g_lock.lock();
     g_last_out = out;
-    g_gaze_norm = sample.gaze_point_2d_norm;
-    g_eye_l_norm = sample.gaze_point_2d_L_norm;
-    g_eye_r_norm = sample.gaze_point_2d_R_norm;
+    // Apply affine gaze correction (same formula as pipeline) so the
+    // visualization matches the UDP output.  Raw device gaze is biased
+    // low (center y ≈ 0.245); the offset/scale brings it to ≈ 0.5.
+    const y_off = g_stream_preset.gaze_y_offset;
+    const y_scl = @max(g_stream_preset.gaze_y_scale, 0.1);
+    g_gaze_norm = .{ sample.gaze_point_2d_norm[0], (sample.gaze_point_2d_norm[1] + y_off) / y_scl };
+    g_eye_l_norm = .{ sample.gaze_point_2d_L_norm[0], (sample.gaze_point_2d_L_norm[1] + y_off) / y_scl };
+    g_eye_r_norm = .{ sample.gaze_point_2d_R_norm[0], (sample.gaze_point_2d_R_norm[1] + y_off) / y_scl };
     g_eye_l_valid = sample.validity_L == 0;
     g_eye_r_valid = sample.validity_R == 0;
-    g_trail[g_trail_head] = sample.gaze_point_2d_norm;
+    g_trail[g_trail_head] = g_gaze_norm;
     g_trail_head = (g_trail_head + 1) % TRAIL_LEN;
     g_lock.unlock();
     sendPacket(out);
@@ -1268,6 +1273,14 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     c.gtk_label_set_xalign(@ptrCast(g_label_source), 0);
     c.gtk_box_append(@ptrCast(box), wptr(g_label_source));
     updateSourceLabel();
+
+    // Note: this is emulated headtracking (eye→head via OpenTrack), not
+    // native Tobii game integration (Windows-only API).
+    const note_label = c.gtk_label_new("Emulated Headtracking via OpenTrack Protocol  ·  Not native Tobii game integration");
+    c.gtk_widget_set_halign(wptr(note_label), c.GTK_ALIGN_START);
+    c.gtk_label_set_xalign(@ptrCast(note_label), 0);
+    c.gtk_style_context_add_class(c.gtk_widget_get_style_context(wptr(note_label)), "dim");
+    c.gtk_box_append(@ptrCast(box), wptr(note_label));
 
     // Input mappings (left) + live eye/head visualization (right), above the
     // setting sliders.

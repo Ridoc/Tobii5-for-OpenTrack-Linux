@@ -201,6 +201,16 @@ and gaze-driven menus, or Tobii's gaze-based UI in some titles) need the
 Windows-only Tobii Game Integration API and are not reachable over the
 OpenTrack head-pose protocol.
 
+> [!IMPORTANT]
+> **Emulated Headtracking.** This bridge converts Tobii eye-tracking data into
+> OpenTrack head-pose packets — it is *not* native Tobii game integration. The
+> eye tracker's gaze + eye-origin measurements are processed through a
+> head-pose estimation pipeline (interocular yaw/pitch, gaze-lead blend,
+> adaptive smoothing) and output as standard OpenTrack UDP. Games that support
+> OpenTrack (including X4: Foundations 7.50+) receive this as head-look input.
+> The "head tracking" is **emulated from eye-tracking data**, not a direct
+> Tobii head-pose stream.
+
 ## License & credits
 
 [GPL-3.0](LICENSE). This is a fork of

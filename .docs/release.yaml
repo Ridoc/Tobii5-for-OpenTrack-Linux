@@ -1,5 +1,5 @@
 # release.yaml — release/publish ledger
-UPDATED: "2026-08-21"
+UPDATED: "2026-08-22"
 REMOTE: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git"
 BRANCH: "main"
 
@@ -7,6 +7,7 @@ TAGS:
   v0.1.0: "released"
   v0.1.1: "released (commit f6bc2e2, tag + push done; GitHub release created)"
   v0.2.0: "released (commit bf2bf2c, tag + push done; GitHub release created)"
+  v0.2.2: "tagged (commit 53342db, TobiiArgus branding); E2E test session 2026-08-22"
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
@@ -30,3 +31,6 @@ PIPELINE_COMPLETED_V0.2.0:
 
 HISTORY_NOTES:
   - "Branch has 38 commits through v0.1.1 + 2 more for v0.2.0 arc (docs + code)."
+  - "v0.2.2 E2E test session 2026-08-22: QA PASS, daemon OK, bridge GUI OK (title/icon/emulated-note), UDP OK (262 packets, 48B, sane values), wizard OK (with fixes)."
+  - "v0.2.2 fixes applied: gaze-viz-affine-fix, cal-window-180, cal-points-inset, emulated-headtracking-note, old-presets-deleted."
+  - "Known: calibration capture fails at extreme corners despite valid ET5 tracking (cal-point-inset workaround applied; root cause investigation pending)."

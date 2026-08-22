@@ -20,14 +20,14 @@ pub const CalPoint = struct {
 
 pub const CALIBRATION_POINTS = [_]CalPoint{
     .{ .x = 0.5, .y = 0.5, .label = "Center" },
-    .{ .x = 0.05, .y = 0.05, .label = "Top-Left" },
-    .{ .x = 0.95, .y = 0.05, .label = "Top-Right" },
+    .{ .x = 0.15, .y = 0.15, .label = "Top-Left" },
+    .{ .x = 0.85, .y = 0.15, .label = "Top-Right" },
     .{ .x = 0.05, .y = 0.95, .label = "Bottom-Left" },
     .{ .x = 0.95, .y = 0.95, .label = "Bottom-Right" },
 };
 
 pub const NUM_CAL_POINTS = CALIBRATION_POINTS.len;
-pub const SAMPLES_PER_POINT = 60; // ~1 second at 60Hz
+pub const SAMPLES_PER_POINT = 180; // ~3 seconds at 60Hz — longer window for corner re-acquire
 
 /// Capture quality gates: below this many valid frames the attempt is thrown
 /// away and the SAME point is retried (eyes often clip out of tracking range
