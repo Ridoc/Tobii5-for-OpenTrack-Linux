@@ -82,67 +82,18 @@ pub const Preset = struct {
     // top 31% of the screen is unreadable → garbage at corners).
     gaze_y_offset: f64 = 0.394, // additive correction: y_true = (y_raw + off)/scale
     gaze_y_scale: f64 = 1.278, // multiplicative correction (>=0.1)
+    // v0.2.6: X-axis affine correction (fitted by the calibration wizard,
+    // overlaid from calibration.json — see main.zig applyCalFit).
+    gaze_x_offset: f64 = 0.0, // additive correction: x_true = (x_raw + off)/scale
+    gaze_x_scale: f64 = 1.0, // multiplicative correction (>=0.1)
+    // v0.2.6: device display area = physical screen × this factor (expanded
+    // track box). Raw device gaze coords are normalized to the EXPANDED area;
+    // the pipeline converts them to physical-screen normalized coords BEFORE
+    // applying the affine correction, so GUI viz and UDP output agree.
+    track_box_factor: f64 = 2.5,
 };
 
 pub const BUILTIN_PRESETS = [_]Preset{
-    .{
-        .name = "tobii-official (old)",
-        // Snapshot of the previous tobii-official before the corner-hold /
-        // pitch-symmetry rework. Kept so the old feel is one click away.
-        .max_yaw = 180.0,
-        .max_pitch = 90.0,
-        .gaze_scale = 40.0,
-        .gaze_scale_pitch = 30.0,
-        .smoothing = 0.90,
-        .pos_smoothing = 0.95,
-        .deadzone = 0.15,
-        .head_gain = 2.0,
-        .eye_ratio = 0.15,
-        .pitch_gain = 1.0,
-        .pos_gain = 2.0,
-        .neck = 13.0,
-        .curve_mode = 2,
-        .curve_exp = 0.5,
-        .flip_yaw = true,
-    },
-    .{
-        .name = "x4 (old)",
-        // Snapshot of the previous x4 before the rework.
-        .max_yaw = 120.0,
-        .max_pitch = 90.0,
-        .gaze_scale = 40.0,
-        .gaze_scale_pitch = 30.0,
-        .smoothing = 0.90,
-        .pos_smoothing = 0.95,
-        .deadzone = 0.15,
-        .head_gain = 2.0,
-        .eye_ratio = 0.15,
-        .pitch_gain = 1.0,
-        .pos_gain = 2.0,
-        .neck = 13.0,
-        .curve_mode = 2,
-        .curve_exp = 0.5,
-        .flip_yaw = true,
-    },
-    .{
-        .name = "x4-smooth (old)",
-        // Snapshot of the previous x4-smooth (head 2.4x) before the rework.
-        .max_yaw = 120.0,
-        .max_pitch = 90.0,
-        .gaze_scale = 40.0,
-        .gaze_scale_pitch = 30.0,
-        .smoothing = 0.90,
-        .pos_smoothing = 0.95,
-        .deadzone = 0.15,
-        .head_gain = 2.4,
-        .eye_ratio = 0.15,
-        .pitch_gain = 1.0,
-        .pos_gain = 2.0,
-        .neck = 13.0,
-        .curve_mode = 2,
-        .curve_exp = 0.5,
-        .flip_yaw = true,
-    },
     .{
         .name = "tobii-official",
         // Clean OEM-style defaults, closest to Tobii's own head-tracking:
@@ -166,6 +117,9 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .curve_mode = 2,
         .curve_exp = 0.5,
         .flip_yaw = true,
+        .gaze_y_offset = 0.0,
+        .gaze_y_scale = 1.0,
+        .track_box_factor = 2.5,
     },
     .{
         .name = "x4",
@@ -186,6 +140,9 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .curve_mode = 2,
         .curve_exp = 0.5,
         .flip_yaw = true,
+        .gaze_y_offset = 0.0,
+        .gaze_y_scale = 1.0,
+        .track_box_factor = 2.5,
     },
     .{
         .name = "x4-smooth",
@@ -207,6 +164,9 @@ pub const BUILTIN_PRESETS = [_]Preset{
         .curve_mode = 2,
         .curve_exp = 0.5,
         .flip_yaw = true,
+        .gaze_y_offset = 0.0,
+        .gaze_y_scale = 1.0,
+        .track_box_factor = 2.5,
     },
 };
 
@@ -840,9 +800,24 @@ ref_set: bool = false,
             !(g_raw[0] == 0.0 and g_raw[1] == 0.0) and
             !(g_raw[0] == -1.0 and g_raw[1] == -1.0);
         if (g_ok) self.last_good_gaze = g_raw;
-        //    Phase 2A: error-map-derived correction (see Preset fields).
+        //    v0.2.6: convert expanded track box coords → physical screen
+        //    coords BEFORE the affine correction (identical math to the GUI
+        //    transform in main.zig onGaze). Device display area = physical ×
+        //    track_box_factor; the physical screen is horizontally centered
+        //    and anchored to the BOTTOM edge of the expanded area:
+        //      device x ∈ [0.5−0.5/f, 0.5+0.5/f] → [0,1]
+        //      device y ∈ [0, 1/f] (Y=0 bottom) → GUI [1,0] (Y=0 top)
+        const f_tb: f64 = @max(p.track_box_factor, 1.0);
+        const phys_x = (self.last_good_gaze[0] - (0.5 - 0.5 / f_tb)) * f_tb;
+        const phys_y = 1.0 - self.last_good_gaze[1] * f_tb;
+        //    Phase 2A: error-map-derived correction (see Preset fields),
+        //    applied on PHYSICAL coords.
         const y_scale = @max(p.gaze_y_scale, 0.1);
-        const g_corr = [2]f64{ self.last_good_gaze[0], (self.last_good_gaze[1] + p.gaze_y_offset) / y_scale };
+        const x_scale = @max(p.gaze_x_scale, 0.1);
+        const g_corr = [2]f64{
+            (phys_x + p.gaze_x_offset) / x_scale,
+            (phys_y + p.gaze_y_offset) / y_scale,
+        };
         const g = self.gaze.filter(g_corr, dt);
         const gaze_yaw = (g[0] - 0.5) * p.gaze_scale;
         const gaze_pitch = (0.5 - g[1]) * p.gaze_scale_pitch;

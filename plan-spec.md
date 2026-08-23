@@ -1,80 +1,99 @@
-# plan-spec.md — v0.2.5 TobiiArgus Display Area Refactor
-# Approved 2026-08-23 by user. Scope: Decouple device track box from physical screen.
-# Track box = expanded 2.5× EDID (matches original tobiifree 1500×1000mm equivalent).
-# Physical screen = EDID auto-detect for GUI/affine/calibration.
-# Calibration only adjusts gaze offset/scale params — NEVER touches device display area.
-BASE_COMMIT: "68b9f8f"
+# plan-spec.md — v0.2.6 GUI Visualization & Gaze Pipeline Fix
+# Approved 2026-08-23 by user. Goal: calibrated center = visualization center,
+# guaranteed BY CONSTRUCTION; pipeline UDP gaze math === bridge GUI math.
+BASE_COMMIT: "3d45732" (+ verified uncommitted v0.2.5-1 baseline: bridge onGaze
+expanded→physical transform, daemon 112-byte extended get_display_area response)
 
-BATCH_1_DISPLAY_AREA_CONFIG:
-  - [x] New types in driver/src/display_area_config.zig:
-      - PhysicalScreen { w_mm, h_mm }
-      - DeviceDisplayArea { w_mm, h_mm, z_mm=65, tilt_deg=12, ox_mm, oy_mm, track_box_factor=2.5 }
-      - CalibrationParams { gaze_y_offset=0.394, gaze_y_scale=1.278, gaze_x_offset=0, gaze_x_scale=1 }
-      - FullConfig { physical_screen, device_display_area, calibration, track_box_factor }
-  - [x] defaultFromEdid(edid, factor=2.5) -> FullConfig:
-      - physical_screen = EDID size
-      - device_display_area = EDID × factor (expanded for track box)
-      - calibration = defaults
-  - [x] toJsonString(FullConfig): serializes ONLY physical_screen + calibration + track_box_factor
-  - [x] loadFromFile(path): loads physical_screen + calibration + factor, recomputes device area
-  - [x] Migration: auto-convert old format (root w_mm/h_mm/z_mm/tilt/cx/cy) to new FullConfig
-  - [x] Driver tests PASS (zig build test in driver/)
+CONTEXT:
+  - v0.2.5 expanded device track box to EDID×2.5 (2000×825mm for 800×330 screen).
+    Physical screen occupies x∈[0.3,0.7], y∈[0,0.4] in device-normalized coords.
+  - Bridge onGaze HAS the expanded→physical transform; pipeline process() did NOT.
+    UDP gaze: +9° phantom pitch at center, yaw sensitivity compressed 2.5×.
+  - Affine presets are identity (0/1); nothing fits them from calibration data even
+    though result_gaze[] holds avg device coords at 5 KNOWN physical points.
+  - VERIFIED-CORRECT (do not re-litigate): bridge transform math, calibration point
+    flow (raw device-space averages → add_calibration_point — device interprets in
+    its own display space), geometry from defaultFromEdid.
+  - KNOWN-ISSUE: bridge onDaemonResponse saw payload_len=164 (expected 112) — root
+    cause UNVERIFIED. Investigate before fixing (may be header miscount, not daemon).
+  - KNOWN-ISSUE: user-reported upper↔down dot oscillation NOT explained by any
+    static code path — must be explained by runtime trace before closing.
 
-BATCH_2_DAEMON_INTEGRATION:
-  - [x] applications/tobiifreed/src/main.zig:
-      - loadFullConfig(): replaces loadDisplayArea(), returns FullConfig
-      - tracker.setDisplayArea(device_display_area): sends EXPANDED area to ET5
-      - get_display_area response extended: 9xf64 corners + 2xf64 physical_screen (w_mm, h_mm)
-      - initConfig(): writes new JSON format to ~/.config/tobii.json
-      - --force-display-area: re-sends expanded device area
-      - --track-box-factor=2.5 CLI flag: overrides factor at startup
-  - [x] driver/src/daemon_protocol.zig: extend SRV display_area (0x03) payload to 11xf64
-  - [x] Daemon ReleaseSafe build PASS (NFS pattern)
+BATCH_1_PIPELINE_TRANSFORM: # tobii_filter.zig — DONE (2026-08-23 session)
+  - [x] Add field to Preset struct (after gaze_y_scale):
+        track_box_factor: f64 = 2.5
+  - [x] Add .track_box_factor = 2.5 to all 3 BUILTIN_PRESETS
+  - [x] In process() (~line 793), transform BEFORE affine:
+          const f_tb: f64 = @max(p.track_box_factor, 1.0);
+          const phys_x = (self.last_good_gaze[0] - (0.5 - 0.5 / f_tb)) * f_tb;
+          const phys_y = 1.0 - self.last_good_gaze[1] * f_tb;
+          const y_scale = @max(p.gaze_y_scale, 0.1);
+          const x_scale = @max(p.gaze_x_scale, 0.1);
+          const g_corr = [2]f64{
+              (phys_x + p.gaze_x_offset) / x_scale,
+              (phys_y + p.gaze_y_offset) / y_scale,
+          };
+  - [x] Keep raw-coords g_ok validation unchanged ([−0.05, 1.05] on raw device coords)
+  - INVARIANT: pipeline math === bridge onGaze math (transform THEN affine)
 
-BATCH_3_BRIDGE_INTEGRATION:
-  - [x] applications/tobiifree-opentrack/src/main.zig:
-      - On startup: send get_display_area (0x02), parse extended 11xf64 response
-      - g_stream_preset (affine correction): uses physical_screen for mapping
-      - GUI visualization: maps gaze to physical_screen rect
-      - eye2dPlausible(): accepts any finite coords (no [0,1] clamp)
-      - --track-box-factor=2.5 CLI flag: forwards to daemon via new command
-  - [x] Bridge ReleaseSafe build PASS (NFS pattern)
+BATCH_2_CALIBRATION_AUTO_FIT: # guarantees center=center by construction — DONE
+  - [x] PRE_CHECK done: presets persist via presets.json (user presets only);
+        builtins seeded from code. Fitted affine stored SEPARATELY in
+        ~/.config/tobiifree-opentrack/calibration.json and overlaid onto
+        active preset (survives preset switches).
+  - [x] Added gaze_x_offset/gaze_x_scale fields to Preset (defaults 0.0 / 1.0)
+  - [x] New fitAffine(result_gaze, factor) in calibration.zig:
+        - Regresses pre-affine coords (transform(raw)) vs known GUI points
+        - Least-squares linear fit per axis over 5 points → {offset, scale}
+        - Guard: reject |scale| < 0.1 or non-finite → keep identity, log warn
+  - [x] Apply fitted params after wizard finish (sendCalibrationToDaemon path):
+        - Persist to calibration.json
+        - Overlay onto g_opts.p (active preset) via applyCalFit()
+        - Re-apply on loadPreset() so it survives preset switches
+  - [x] Bridge onGaze: extended affine to X identically:
+        gui_x = (phys_x + x_off) / x_scl ; gui_y = (phys_y + y_off) / y_scl
+        (per-eye dots likewise)
+  - [x] CLI flags --gaze-x-offset / --gaze-x-scale added (with override tracking)
+  - [x] usage() text updated for new flags
+  - INVARIANT: after calibrating while staring at Center → g_gaze_norm == (0.5, 0.5)
 
-BATCH_4_CALIBRATION_WIZARD:
-  - [x] applications/tobiifree-opentrack/src/calibration.zig:
-      - calAddPoint(): sends points normalized to physical_screen [0,1]
-      - calCompute()/calApply(): ONLY bakes gaze_x/y_offset/scale into Preset
-      - REMOVE any set_display_area calls or device area modifications
-      - Config persistence: updates calibration params in JSON only
-  - [x] Wizard UI unchanged (progress ring, counter below dot)
+BATCH_3_FRAMING_DIAGNOSE_THEN_FIX: # NEXT SESSION — investigate before fixing
+  - [x] READ socket_source.zig dispatchMessage/processMessages framing logic
+  - [x] READ daemon_protocol.zig encodeResponse — does bridge count header into payload_len?
+    (encodeResponse: HEADER_SIZE + 1 + payload.len; response payload = [cmd_type][payload])
+  - [x] HYPOTHESIS CONFIRMED: daemon checks `payload_len == 72` on RAW TTP payload, but TTP
+    payload is TLV-encoded (3× point3d = 3×48B + 2B prefix ≈ 146-164B). Condition FAILS,
+    daemon sends raw TLV payload (~164B) instead of extending to 112B. Bridge sees 164.
+  - [x] Fix: daemon onResponse must decode TLV via core.decode_display_area(), then extend
+  - FILES: driver/src/socket_source.zig, driver/src/daemon_protocol.zig, applications/tobiifreed/src/main.zig
 
-BATCH_5_MIGRATION_QA:
-  - [x] ~/.config/tobii.json auto-migration on first run:
-      - Detect old format → extract physical_screen (w_mm/h_mm) + calibration (from preset defaults)
-      - Write new format with track_box_factor=2.5
-  - [x] QA Gate:
-      - [x] Driver zig build test PASS
-      - [x] Daemon + Bridge ReleaseSafe builds PASS
-      - [x] Runtime: daemon logs "display_area 2000x825mm origin=(-1000,-10) z=65 tilt=12 factor=2.5"
-      - [x] Runtime: device reports updated corners after force-apply
-      - [x] Runtime: both eyes tracked at upper 10-15% (no single-eye loss)
-      - [x] Runtime: GUI dot correctly maps to physical screen
-      - [x] Runtime: UDP packets sane
-      - [x] Calibration: 5-point completes, only calibration params updated in JSON
-      - [x] Edge cases: missing config, different EDID sizes, factor override
+BATCH_4_CLEANUP: # DONE (2026-08-23 session)
+  - [x] Removed debug hex logging from bridge onDaemonResponse
+  - [x] Kept minimal payload_len diagnostic for get_display_area (for BATCH_3)
 
-FIXES_APPLIED_THIS_SESSION:
-  - track-box-expansion: device_display_area = EDID × 2.5 (2000×825mm for 800×330 screen) restores original tobiifree track box size (~1500×1000mm equivalent)
-  - physical-screen-separation: GUI/affine/calibration use actual EDID size (800×330mm)
-  - calibration-no-display-area: calibration only adjusts offset/scale, never overwrites device track box
-  - configurable-factor: track_box_factor in JSON + --track-box-factor CLI (default 2.5)
-  - protocol-extension: get_display_area returns device corners + physical_screen dims
-  - config-migration: auto-convert old tobii.json format
+BATCH_5_QA_GATE: # NEXT SESSION
+  - [ ] Bridge ReleaseSafe build PASS (NFS cache pattern) — done locally
+  - [ ] Daemon ReleaseSafe build PASS (NFS cache pattern) — untouched, should pass
+  - [ ] Driver zig build test PASS — untouched, should pass
+  - [ ] RUNTIME TRACE: log raw_dev → phys → affine → gui for ~10s live session;
+        EXPLAIN the upper↔down oscillation empirically before close
+  - [ ] Manual (ET5 hardware): center stare → dot at center; edge glance → UDP
+        yaw spans full ±20° range (not ±8°)
+
+TECH_DEBT_LOGGED_AFTER:
+  - display_area_config.CalibrationParams defaults 0.394/1.278 are inert/stale
+  - per-eye viz clamped [-0.2,1.2] vs main gaze unclamped (cosmetic inconsistency)
 
 NOTES:
-  - Original tobiifree (Aetherall + all forks) uses 1500×1000mm z=0 tilt=0 defaults for huge track box
-  - Our v0.1.1 EDID detection shrank it to physical screen → single-eye loss at edges
-  - This refactor restores large track box while keeping correct clip-mount geometry
-  - Affine correction (gaze_y_offset=0.394, gaze_y_scale=1.278) calibrated on physical screen
-  - Bridge sends NO UDP when no eyes tracked (unchanged)
-  - AGENTS.md untracked — do NOT commit
+  - User must RE-RUN device calibration after deploy (device model rebuilds for
+    expanded area; historical residual bias makes affine auto-fit necessary).
+  - AGENTS.md untracked — do NOT commit.
+  - Working tree dirty with v0.2.5-1 baseline + v0.2.6 edits — DO NOT REVERT.
+    These are the verified baseline + implemented fixes.
+
+HANDOVER STATUS (2026-08-23):
+  - BATCH_1 + BATCH_2 + BATCH_4 COMPLETE. Code compiles (zig 0.15.2).
+  - Binary parked at applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack
+    with BUILD_INFO.txt stamp.
+  - NEXT AGENT: Start with BATCH_3 framing investigation (read socket_source.zig
+    + daemon_protocol.zig), then BATCH_5 QA on real ET5 hardware.

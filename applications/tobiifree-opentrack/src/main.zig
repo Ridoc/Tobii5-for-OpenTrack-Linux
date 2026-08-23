@@ -47,8 +47,94 @@ var g_dst: std.net.Address = undefined;
 /// Populated by get_display_area response after connecting to daemon.
 var g_physical_screen: ?da_config.PhysicalScreen = null;
 
+/// Physical configuration from daemon (track box factor, tilt, physical screen).
+/// Populated by get_display_area response after connecting to daemon.
+var g_physical_config: ?PhysicalConfig = null;
+
+/// Physical configuration from daemon.
+const PhysicalConfig = struct {
+    physical_screen: da_config.PhysicalScreen,
+    track_box_factor: f64,
+    tilt_deg: f64,
+};
+
 /// Track box factor override from CLI (forwarded to daemon).
 var g_track_box_factor: f64 = 2.5;
+
+// ─── v0.2.6: fitted gaze affine (calibration result, NOT a feel param) ──
+//
+// The wizard fits physical = (device + offset)/scale per axis from the 5
+// captured points. This corrects DEVICE bias, so unlike smoothing/gains it
+// must survive preset switches: it lives in its own calibration.json and is
+// overlaid onto whichever preset becomes active (see applyCalFit).
+var g_cal_fit: calibration.AffineFit = .{};
+var g_cli_gaze_override: bool = false; // explicit --gaze-* flags beat the fit
+
+fn calFitPath(buf: *[512]u8) ?[]const u8 {
+    if (std.posix.getenv("XDG_CONFIG_HOME")) |x| {
+        return std.fmt.bufPrint(buf, "{s}/tobiifree-opentrack/calibration.json", .{x}) catch null;
+    }
+    const home = std.posix.getenv("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.config/tobiifree-opentrack/calibration.json", .{home}) catch null;
+}
+
+/// Overlay the fitted affine onto a preset's gaze-correction fields.
+fn applyCalFit(p: *tobii.Preset) void {
+    p.gaze_x_offset = g_cal_fit.gaze_x_offset;
+    p.gaze_x_scale = g_cal_fit.gaze_x_scale;
+    p.gaze_y_offset = g_cal_fit.gaze_y_offset;
+    p.gaze_y_scale = g_cal_fit.gaze_y_scale;
+}
+
+fn loadCalFit() void {
+    var pathbuf: [512]u8 = undefined;
+    const path = calFitPath(&pathbuf) orelse return;
+    const alloc = g_presets_arena.allocator();
+    const data = std.fs.cwd().readFileAlloc(alloc, path, 4096) catch return;
+    const parsed = std.json.parseFromSlice(calibration.AffineFit, alloc, data, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        log.warn("calibration.json unreadable — using identity gaze correction", .{});
+        return;
+    };
+    const v = parsed.value;
+    if (!std.math.isFinite(v.gaze_x_offset) or !std.math.isFinite(v.gaze_y_offset) or
+        !std.math.isFinite(v.gaze_x_scale) or !std.math.isFinite(v.gaze_y_scale))
+    {
+        log.warn("calibration.json has non-finite values — ignored", .{});
+        return;
+    }
+    g_cal_fit = v;
+    log.info("loaded calibration fit: x=({d:.3}/{d:.3}) y=({d:.3}/{d:.3})", .{
+        v.gaze_x_offset, v.gaze_x_scale, v.gaze_y_offset, v.gaze_y_scale,
+    });
+}
+
+fn saveCalFit() void {
+    var pathbuf: [512]u8 = undefined;
+    const path = calFitPath(&pathbuf) orelse return;
+    const dirname = std.fs.path.dirname(path) orelse return;
+    var dir = std.fs.cwd().makeOpenPath(dirname, .{}) catch |e| {
+        log.err("cannot save calibration.json: {s}", .{@errorName(e)});
+        return;
+    };
+    defer dir.close();
+    var body_buf: [512]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf,
+        \\{{
+        \\  "gaze_x_offset": {d:.6},
+        \\  "gaze_x_scale": {d:.6},
+        \\  "gaze_y_offset": {d:.6},
+        \\  "gaze_y_scale": {d:.6}
+        \\}}
+    , .{
+        g_cal_fit.gaze_x_offset, g_cal_fit.gaze_x_scale,
+        g_cal_fit.gaze_y_offset, g_cal_fit.gaze_y_scale,
+    }) catch return;
+    dir.writeFile(.{ .sub_path = std.fs.path.basename(path), .data = body }) catch |e| {
+        log.err("cannot write calibration.json: {s}", .{@errorName(e)});
+    };
+}
 
 // Tobii-feel pipeline + preset storage (arena-backed, lives for app lifetime).
 var g_pipeline: tobii.TobiiPipeline = .{};
@@ -398,27 +484,46 @@ fn onGaze(sample: *const core.GazeSample) void {
     const out = g_pipeline.process(sample, &g_stream_preset, dt);
     g_lock.lock();
     g_last_out = out;
+    // Transform device expanded coords -> physical normalized [0,1]
+    // Device uses expanded track box (physical * factor). Physical screen
+    // occupies x in [0.5 - 0.5/factor, 0.5 + 0.5/factor], y in [0, 1/factor].
+    // Device Y=0 is bottom, GUI Y=0 is top → INVERT Y.
+    const factor: f64 = if (g_physical_config) |pc| pc.track_box_factor else 2.5;
+    // Transform device expanded coords -> physical normalized [0,1]
+    // x: physical screen centered horizontally → [0.5-0.5/f, 0.5+0.5/f] → [0,1]
+    const phys_x = (sample.gaze_point_2d_norm[0] - (0.5 - 0.5 / factor)) * factor;
+    // y: device Y=0 at bottom, GUI Y=0 at top → INVERT Y.
+    // Device Y in [0, 1/factor] for physical screen → GUI [1, 0] (inverted)
+    const phys_y = 1.0 - sample.gaze_point_2d_norm[1] * factor;
     // Apply affine gaze correction (same formula as pipeline) so the
-    // visualization matches the UDP output.  Raw device gaze is biased
-    // low (center y ≈ 0.245); the offset/scale brings it to ≈ 0.5.
+    // visualization matches the UDP output. Now on physical normalized coords,
+    // both axes (v0.2.6: X affine added, fitted by the calibration wizard).
     const y_off = g_stream_preset.gaze_y_offset;
     const y_scl = @max(g_stream_preset.gaze_y_scale, 0.1);
-    g_gaze_norm = .{ sample.gaze_point_2d_norm[0], (sample.gaze_point_2d_norm[1] + y_off) / y_scl };
+    const x_off = g_stream_preset.gaze_x_offset;
+    const x_scl = @max(g_stream_preset.gaze_x_scale, 0.1);
+    const gui_x = (phys_x + x_off) / x_scl;
+    const gui_y = (phys_y + y_off) / y_scl;
+    g_gaze_norm = .{ gui_x, gui_y };
     // Only update per-eye viz coords when eye is plausible (not lost).
     // When eye is lost (validity=4), device sends raw=(0,0) which would
     // place the dot at left edge after correction. Keep last known position.
     const l_plausible = eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
     const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
     if (l_plausible) {
+        const l_phys_x = (sample.gaze_point_2d_L_norm[0] - (0.5 - 0.5 / factor)) * factor;
+        const l_phys_y = 1.0 - sample.gaze_point_2d_L_norm[1] * factor;
         g_eye_l_norm = .{
-            sample.gaze_point_2d_L_norm[0],
-            @min(@max((sample.gaze_point_2d_L_norm[1] + y_off) / y_scl, -0.2), 1.2)
+            (l_phys_x + x_off) / x_scl,
+            @min(@max((l_phys_y + y_off) / y_scl, -0.2), 1.2)
         };
     }
     if (r_plausible) {
+        const r_phys_x = (sample.gaze_point_2d_R_norm[0] - (0.5 - 0.5 / factor)) * factor;
+        const r_phys_y = 1.0 - sample.gaze_point_2d_R_norm[1] * factor;
         g_eye_r_norm = .{
-            sample.gaze_point_2d_R_norm[0],
-            @min(@max((sample.gaze_point_2d_R_norm[1] + y_off) / y_scl, -0.2), 1.2)
+            (r_phys_x + x_off) / x_scl,
+            @min(@max((r_phys_y + y_off) / y_scl, -0.2), 1.2)
         };
     }
     g_eye_l_valid = sample.validity_L == 0 or l_plausible;
@@ -757,6 +862,9 @@ fn loadPreset(idx: usize) void {
     if (idx >= g_preset_list.items.len) return;
     g_lock.lock();
     g_opts.p = g_preset_list.items[idx];
+    // The fitted gaze correction is device-specific, not a feel parameter:
+    // re-apply it on top of whatever preset becomes active.
+    if (!g_cli_gaze_override) applyCalFit(&g_opts.p);
     g_lock.unlock();
     g_cur_preset_idx = idx;
     syncSliders();
@@ -1118,6 +1226,26 @@ fn sendCalibrationToDaemon() void {
     for (0..calibration.NUM_CAL_POINTS) |i| results[i] = g_calibrator.result_gaze[i];
     g_cal_mutex.unlock();
 
+    // v0.2.6: fit the bridge-side affine from the captured points. This is
+    // what guarantees "calibrated center = visualization center": the 5
+    // averaged device coords are regressed against the KNOWN on-screen point
+    // positions, and the resulting offset/scale are overlaid onto the active
+    // preset (and persisted to calibration.json).
+    const fit_factor = if (g_physical_config) |pc| pc.track_box_factor else g_track_box_factor;
+    if (calibration.fitAffine(results, fit_factor)) |fit| {
+        g_cal_fit = fit;
+        saveCalFit();
+        g_lock.lock();
+        applyCalFit(&g_opts.p);
+        g_lock.unlock();
+        log.info("fitted gaze affine (factor {d:.2}): x=({d:.3}/{d:.3}) y=({d:.3}/{d:.3})", .{
+            fit_factor,          fit.gaze_x_offset, fit.gaze_x_scale,
+            fit.gaze_y_offset,   fit.gaze_y_scale,
+        });
+    } else {
+        log.warn("gaze affine fit degenerate — keeping previous correction", .{});
+    }
+
     const sock = g_cal_socket orelse {
         log.err("no daemon connection — cannot run device-side calibration", .{});
         _ = c.g_idle_add(@ptrCast(&idleCloseCalWindow), null);
@@ -1137,9 +1265,9 @@ fn sendCalibrationToDaemon() void {
 
     // NOTE: With the new architecture (v0.2.5), the device display area is
     // recomputed from physical_screen × track_box_factor on every daemon start.
-    // Calibration only adjusts the device's internal gaze estimation (via the
-    // calibration blob). The bridge's affine correction (gaze_y_offset/scale)
-    // is a preset parameter, not a calibration result. Nothing to persist here.
+    // Calibration adjusts the device's internal gaze estimation (via the
+    // calibration blob) AND the bridge-side affine (fitted above, persisted to
+    // calibration.json). It never touches the device display area.
     log.info("calibration sent to device; awaiting blob reply", .{});
 
     // Window stays open ("Applying…") until the blob reply arrives; if it
@@ -1149,11 +1277,37 @@ fn sendCalibrationToDaemon() void {
 
 /// Stream-thread side (called during socket poll): daemon replied to our
 /// finish_calibration — stash the blob, send it back as cal_apply, close.
-/// Also handles get_display_area to get physical_screen dimensions.
+/// Also handles get_display_area to get physical_screen dimensions, factor, and tilt.
 fn onDaemonResponse(cmd_type: u8, payload: []const u8) void {
+    // TODO(BATCH_3): remove once framing verified — temporary diagnostic.
     if (cmd_type == @intFromEnum(proto.Cmd.get_display_area)) {
-        // Extended response: 11 f64 = 88 bytes (9 corners + physical_screen w_mm, h_mm)
-        if (payload.len == 88) {
+        log.info("onDaemonResponse: get_display_area payload_len={d} (expect 112)", .{payload.len});
+    }
+    if (cmd_type == @intFromEnum(proto.Cmd.get_display_area)) {
+        // Extended response: 14 f64 = 112 bytes (9 corners + physical_screen w_mm, h_mm + factor + tilt)
+        // Legacy: 11 f64 = 88 bytes (9 corners + physical_screen w_mm, h_mm)
+        if (payload.len == 112) {
+            var phys_w_bits: u64 = 0;
+            var phys_h_bits: u64 = 0;
+            var factor_bits: u64 = 0;
+            var tilt_bits: u64 = 0;
+            @memcpy(std.mem.asBytes(&phys_w_bits), payload[72..80]);
+            @memcpy(std.mem.asBytes(&phys_h_bits), payload[80..88]);
+            @memcpy(std.mem.asBytes(&factor_bits), payload[88..96]);
+            @memcpy(std.mem.asBytes(&tilt_bits), payload[96..104]);
+            const phys_w: f64 = @bitCast(phys_w_bits);
+            const phys_h: f64 = @bitCast(phys_h_bits);
+            const factor: f64 = @bitCast(factor_bits);
+            const tilt: f64 = @bitCast(tilt_bits);
+            g_physical_screen = da_config.PhysicalScreen{ .w_mm = phys_w, .h_mm = phys_h };
+            g_physical_config = PhysicalConfig{
+                .physical_screen = .{ .w_mm = phys_w, .h_mm = phys_h },
+                .track_box_factor = factor,
+                .tilt_deg = tilt,
+            };
+            log.info("received physical screen: {d:.0}×{d:.0}mm factor={d:.1} tilt={d:.1}°", .{ phys_w, phys_h, factor, tilt });
+        } else if (payload.len == 88) {
+            // Legacy format (v0.2.5): 9 corners + physical_screen only
             var phys_w_bits: u64 = 0;
             var phys_h_bits: u64 = 0;
             @memcpy(std.mem.asBytes(&phys_w_bits), payload[72..80]);
@@ -1161,7 +1315,12 @@ fn onDaemonResponse(cmd_type: u8, payload: []const u8) void {
             const phys_w: f64 = @bitCast(phys_w_bits);
             const phys_h: f64 = @bitCast(phys_h_bits);
             g_physical_screen = da_config.PhysicalScreen{ .w_mm = phys_w, .h_mm = phys_h };
-            log.info("received physical screen: {d:.0}×{d:.0}mm", .{ phys_w, phys_h });
+            g_physical_config = PhysicalConfig{
+                .physical_screen = .{ .w_mm = phys_w, .h_mm = phys_h },
+                .track_box_factor = 2.5,
+                .tilt_deg = 12.0,
+            };
+            log.info("received physical screen (legacy): {d:.0}×{d:.0}mm (using defaults)", .{ phys_w, phys_h });
         }
         return;
     }
@@ -1486,6 +1645,8 @@ fn usage() void {
         \\  --gaze-scale-pitch <deg> gaze → pitch at screen edge (default {d:.0})
         \\  --gaze-y-offset <n>   error-map gaze-y offset, y=(raw+off)/scale (default {d:.3})
         \\  --gaze-y-scale <n>    error-map gaze-y scale, >=0.1 (default {d:.3})
+        \\  --gaze-x-offset <n>   fitted gaze-x offset, x=(raw+off)/scale (default {d:.3})
+        \\  --gaze-x-scale <n>    fitted gaze-x scale, >=0.1 (default {d:.3})
         \\  --curve <linear|power|tobii> response curve (default tobii)
         \\  --curve-exp <0.2..3> power-curve exponent (default {d:.2})
         \\  --flip-yaw           invert head yaw direction
@@ -1513,6 +1674,8 @@ fn usage() void {
         tobii.BUILTIN_PRESETS[0].gaze_scale_pitch,
         tobii.BUILTIN_PRESETS[0].gaze_y_offset,
         tobii.BUILTIN_PRESETS[0].gaze_y_scale,
+        tobii.BUILTIN_PRESETS[0].gaze_x_offset,
+        tobii.BUILTIN_PRESETS[0].gaze_x_scale,
         tobii.BUILTIN_PRESETS[0].curve_exp,
     });
 }
@@ -1611,12 +1774,26 @@ fn parseArgs() void {
                 std.process.exit(2);
             };
         } else if (std.mem.eql(u8, arg, "--gaze-y-offset")) {
+            g_cli_gaze_override = true;
             g_opts.p.gaze_y_offset = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
                 usage();
                 std.process.exit(2);
             };
         } else if (std.mem.eql(u8, arg, "--gaze-y-scale")) {
+            g_cli_gaze_override = true;
             g_opts.p.gaze_y_scale = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
+                usage();
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--gaze-x-offset")) {
+            g_cli_gaze_override = true;
+            g_opts.p.gaze_x_offset = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
+                usage();
+                std.process.exit(2);
+            };
+        } else if (std.mem.eql(u8, arg, "--gaze-x-scale")) {
+            g_cli_gaze_override = true;
+            g_opts.p.gaze_x_scale = std.fmt.parseFloat(f64, needArg(&args, arg)) catch {
                 usage();
                 std.process.exit(2);
             };
@@ -1719,6 +1896,11 @@ pub fn main() void {
         log.info("saved preset '{s}'", .{name});
         return;
     }
+
+    // v0.2.6: overlay the fitted gaze affine (calibration.json) onto the
+    // active preset — unless the user explicitly overrode gaze params via CLI.
+    loadCalFit();
+    if (!g_cli_gaze_override) applyCalFit(&g_opts.p);
 
     g_dst = std.net.Address.parseIp(g_opts.host, g_opts.port) catch |err| {
         log.err("cannot resolve {s}:{d}: {s}", .{ g_opts.host, g_opts.port, @errorName(err) });

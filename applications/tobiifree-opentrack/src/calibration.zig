@@ -264,3 +264,72 @@ pub const DisplayAreaResult = struct {
     z_mm: f64,
     tilt_deg: f64,
 };
+
+// ─── v0.2.6: affine auto-fit from calibration results ────────────────
+
+/// Fitted gaze correction: physical = (device + offset) / scale, per axis.
+/// Persisted to ~/.config/tobiifree-opentrack/calibration.json and overlaid
+/// onto whichever preset is active (see main.zig applyCalFit).
+pub const AffineFit = struct {
+    gaze_x_offset: f64 = 0.0,
+    gaze_x_scale: f64 = 1.0,
+    gaze_y_offset: f64 = 0.0,
+    gaze_y_scale: f64 = 1.0,
+};
+
+/// Least-squares linear fit of device reading vs known physical position for
+/// one axis: device ≈ a·physical + b  →  physical = (device − b)/a.
+fn fitAxis(points: []const [2]f64) ?struct { scale: f64, offset: f64 } {
+    const n: f64 = @floatFromInt(points.len);
+    if (points.len < 2) return null;
+    var sx: f64 = 0;
+    var sy: f64 = 0;
+    var sxx: f64 = 0;
+    var sxy: f64 = 0;
+    for (points) |pt| {
+        sx += pt[0];
+        sy += pt[1];
+        sxx += pt[0] * pt[0];
+        sxy += pt[0] * pt[1];
+    }
+    const denom = n * sxx - sx * sx;
+    if (!std.math.isFinite(denom) or @abs(denom) < 1e-9) return null;
+    const a = (n * sxy - sx * sy) / denom; // scale
+    const b = (sy - a * sx) / n; // intercept
+    // Guards: degenerate fits keep identity so the pipeline never divides by
+    // ~0 or flips an axis from garbage data.
+    if (!std.math.isFinite(a) or !std.math.isFinite(b)) return null;
+    if (@abs(a) < 0.1 or @abs(a) > 100.0) return null;
+    return .{ .scale = a, .offset = -b };
+}
+
+/// Fit the affine correction that maps averaged device gaze coords (captured
+/// at the 5 wizard points) to physical screen coords.
+///
+/// The pipeline/bridge compute, per axis:
+///   pre = transform(raw_device)          (== GUI coord when device is perfect)
+///     X: pre_x = (raw_x − (0.5 − 0.5/f)) · f
+///     Y: pre_y = 1 − raw_y · f            (Y inverted: device 0=bottom)
+///   gui = (pre + offset) / scale         ← what we fit here
+///
+/// So each calibration point contributes the pair {known_gui, pre}, and the
+/// least-squares line pre ≈ a·gui + b gives scale=a, offset=−b. Perfect data
+/// yields a=1, b=0 (identity). Returns null (keep identity) on degenerate data.
+pub fn fitAffine(result_gaze: [NUM_CAL_POINTS][2]f64, factor: f64) ?AffineFit {
+    const f = if (factor >= 1.0) factor else return null;
+    var xs: [NUM_CAL_POINTS][2]f64 = undefined; // {gui_x, pre_x}
+    var ys: [NUM_CAL_POINTS][2]f64 = undefined; // {gui_y, pre_y}
+    for (CALIBRATION_POINTS, result_gaze, 0..) |cp, gz, i| {
+        if (!std.math.isFinite(gz[0]) or !std.math.isFinite(gz[1])) return null;
+        xs[i] = .{ cp.x, (gz[0] - (0.5 - 0.5 / f)) * f };
+        ys[i] = .{ cp.y, 1.0 - gz[1] * f };
+    }
+    const fx = fitAxis(&xs) orelse return null;
+    const fy = fitAxis(&ys) orelse return null;
+    return .{
+        .gaze_x_offset = fx.offset,
+        .gaze_x_scale = fx.scale,
+        .gaze_y_offset = fy.offset,
+        .gaze_y_scale = fy.scale,
+    };
+}

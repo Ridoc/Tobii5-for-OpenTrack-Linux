@@ -139,16 +139,31 @@ fn onResponse(request_id: u32, payload_ptr: [*]const u8, payload_len: u32) void 
         return;
     };
 
-    // For get_display_area, extend the 9-corner response with physical_screen dims.
-    var extended_payload: [88]u8 = undefined;
+    // For get_display_area, extend the 9-corner response with physical_screen dims,
+    // track_box_factor, and tilt_deg. New format: 14 f64 = 112 bytes.
+    // The incoming payload is RAW TTP response (TLV-encoded, ~164B), not decoded 72B.
+    // We must decode it first via core.decode_display_area().
+    var extended_payload: [112]u8 = undefined;
     var payload_to_send: []const u8 = payload_ptr[0..payload_len];
-    if (entry.cmd_type == @intFromEnum(proto.Cmd.get_display_area) and payload_len == 72) {
-        @memcpy(extended_payload[0..72], payload_ptr[0..72]);
-        const phys_w = full_cfg.physical_screen.w_mm;
-        const phys_h = full_cfg.physical_screen.h_mm;
-        @memcpy(extended_payload[72..80], std.mem.asBytes(&phys_w));
-        @memcpy(extended_payload[80..88], std.mem.asBytes(&phys_h));
-        payload_to_send = extended_payload[0..88];
+    if (entry.cmd_type == @intFromEnum(proto.Cmd.get_display_area)) {
+        // Decode TLV payload (9 f64 = 72 bytes) into local buffer.
+        var decoded: [72]u8 = undefined;
+        const ok = core.decode_display_area(payload_ptr, @intCast(payload_len), &decoded);
+        if (ok == 1) {
+            @memcpy(extended_payload[0..72], decoded[0..72]);
+            const phys_w = full_cfg.physical_screen.w_mm;
+            const phys_h = full_cfg.physical_screen.h_mm;
+            const factor = full_cfg.device_display_area.track_box_factor;
+            const tilt = full_cfg.device_display_area.tilt_deg;
+            @memcpy(extended_payload[72..80], std.mem.asBytes(&phys_w));
+            @memcpy(extended_payload[80..88], std.mem.asBytes(&phys_h));
+            @memcpy(extended_payload[88..96], std.mem.asBytes(&factor));
+            @memcpy(extended_payload[96..104], std.mem.asBytes(&tilt));
+            // [104..112] reserved (zero)
+            payload_to_send = extended_payload[0..112];
+        } else {
+            log.warn("get_display_area: decode_display_area failed, sending raw payload", .{});
+        }
     }
 
     var buf: [proto.HEADER_SIZE + 1 + 8192]u8 = undefined;
