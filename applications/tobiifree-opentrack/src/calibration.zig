@@ -297,9 +297,10 @@ fn fitAxis(points: []const [2]f64) ?struct { scale: f64, offset: f64 } {
     const a = (n * sxy - sx * sy) / denom; // scale
     const b = (sy - a * sx) / n; // intercept
     // Guards: degenerate fits keep identity so the pipeline never divides by
-    // ~0 or flips an axis from garbage data.
+    // ~0 or flips an axis from garbage data. A NEGATIVE scale would flip the
+    // axis (top↔bottom / left↔right), which is never correct for a gaze map.
     if (!std.math.isFinite(a) or !std.math.isFinite(b)) return null;
-    if (@abs(a) < 0.1 or @abs(a) > 100.0) return null;
+    if (a <= 0.1 or a > 100.0) return null;
     return .{ .scale = a, .offset = -b };
 }
 
@@ -309,7 +310,7 @@ fn fitAxis(points: []const [2]f64) ?struct { scale: f64, offset: f64 } {
 /// The pipeline/bridge compute, per axis:
 ///   pre = transform(raw_device)          (== GUI coord when device is perfect)
 ///     X: pre_x = (raw_x − (0.5 − 0.5/f)) · f
-///     Y: pre_y = 1 − raw_y · f            (Y inverted: device 0=bottom)
+///     Y: pre_y = (0.5 + 0.5/f − raw_y) · f   (screen CENTERED in box; Y inverted)
 ///   gui = (pre + offset) / scale         ← what we fit here
 ///
 /// So each calibration point contributes the pair {known_gui, pre}, and the
@@ -322,7 +323,7 @@ pub fn fitAffine(result_gaze: [NUM_CAL_POINTS][2]f64, factor: f64) ?AffineFit {
     for (CALIBRATION_POINTS, result_gaze, 0..) |cp, gz, i| {
         if (!std.math.isFinite(gz[0]) or !std.math.isFinite(gz[1])) return null;
         xs[i] = .{ cp.x, (gz[0] - (0.5 - 0.5 / f)) * f };
-        ys[i] = .{ cp.y, 1.0 - gz[1] * f };
+        ys[i] = .{ cp.y, (0.5 + 0.5 / f - gz[1]) * f };
     }
     const fx = fitAxis(&xs) orelse return null;
     const fy = fitAxis(&ys) orelse return null;

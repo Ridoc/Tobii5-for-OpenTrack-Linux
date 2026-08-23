@@ -492,9 +492,10 @@ fn onGaze(sample: *const core.GazeSample) void {
     // Transform device expanded coords -> physical normalized [0,1]
     // x: physical screen centered horizontally → [0.5-0.5/f, 0.5+0.5/f] → [0,1]
     const phys_x = (sample.gaze_point_2d_norm[0] - (0.5 - 0.5 / factor)) * factor;
-    // y: device Y=0 at bottom, GUI Y=0 at top → INVERT Y.
-    // Device Y in [0, 1/factor] for physical screen → GUI [1, 0] (inverted)
-    const phys_y = 1.0 - sample.gaze_point_2d_norm[1] * factor;
+    // y: physical screen is CENTERED in the expanded device track box.
+    // Device y ∈ [0.5−0.5/f, 0.5+0.5/f] → GUI [1, 0] (screen top→0, bottom→1).
+    // Empirically confirmed (BATCH_3 diag): screen center reads raw_y≈0.50.
+    const phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_norm[1]) * factor;
     // Apply affine gaze correction (same formula as pipeline) so the
     // visualization matches the UDP output. Now on physical normalized coords,
     // both axes (v0.2.6: X affine added, fitted by the calibration wizard).
@@ -512,7 +513,7 @@ fn onGaze(sample: *const core.GazeSample) void {
     const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
     if (l_plausible) {
         const l_phys_x = (sample.gaze_point_2d_L_norm[0] - (0.5 - 0.5 / factor)) * factor;
-        const l_phys_y = 1.0 - sample.gaze_point_2d_L_norm[1] * factor;
+        const l_phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_L_norm[1]) * factor;
         g_eye_l_norm = .{
             (l_phys_x + x_off) / x_scl,
             @min(@max((l_phys_y + y_off) / y_scl, -0.2), 1.2)
@@ -520,7 +521,7 @@ fn onGaze(sample: *const core.GazeSample) void {
     }
     if (r_plausible) {
         const r_phys_x = (sample.gaze_point_2d_R_norm[0] - (0.5 - 0.5 / factor)) * factor;
-        const r_phys_y = 1.0 - sample.gaze_point_2d_R_norm[1] * factor;
+        const r_phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_R_norm[1]) * factor;
         g_eye_r_norm = .{
             (r_phys_x + x_off) / x_scl,
             @min(@max((r_phys_y + y_off) / y_scl, -0.2), 1.2)
