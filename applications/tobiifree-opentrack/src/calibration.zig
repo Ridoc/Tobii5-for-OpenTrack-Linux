@@ -94,20 +94,30 @@ pub const Calibrator = struct {
         return @as(f64, @floatFromInt(self.current_point)) / @as(f64, @floatFromInt(NUM_CAL_POINTS));
     }
 
-    /// Feed a gaze sample during capturing. One valid eye is enough for
-    /// calibration (clip-mounted trackers frequently lose one eye at extreme
-    /// angles). Returns true once SAMPLES_PER_POINT frames have arrived.
-    pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
-        if (self.state != .capturing) return false;
+/// Returns true if the per-eye 2D gaze coordinates are plausible (not the
+/// device's −1.0/−1.0 no-tracking sentinel, not the zero-vector (0,0) used
+/// when validity=4). The device emits −1.0/−1.0 for untracked eyes and (0,0)
+/// when validity=4. At screen edges coords legitimately exceed [0,1] (looking
+/// above/below screen), so we only reject sentinel/zero and accept any finite.
+fn eye2dPlausible(px: f64, py: f64) bool {
+    return !(px == -1.0 and py == -1.0) and !(px == 0.0 and py == 0.0) and std.math.isFinite(px) and std.math.isFinite(py);
+}
 
-        // Accept any sample where at least ONE eye is tracked.
-        const any_valid = sample.validity_L == 0 or sample.validity_R == 0;
-        if (any_valid) {
-            // Use whichever eye(s) are available for the position average.
-            const l_ok = sample.validity_L == 0;
-            const r_ok = sample.validity_R == 0;
+/// Feed a gaze sample during capturing. One valid eye is enough for
+/// calibration (clip-mounted trackers frequently lose one eye at extreme
+/// angles). Returns true once SAMPLES_PER_POINT frames have arrived.
+pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
+    if (self.state != .capturing) return false;
+
+    // Accept any sample where at least ONE eye is tracked (by validity flag
+    // or by plausible per-eye 2D coords — fixes corner false-negatives).
+    const l_plausible = eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
+    const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
+    const l_ok = sample.validity_L == 0 or l_plausible;
+    const r_ok = sample.validity_R == 0 or r_plausible;
+    const any_valid = l_ok or r_ok;
+    if (any_valid) {
             if (l_ok and r_ok) {
-                // Both eyes — average.
                 self.gaze_x_sum += sample.gaze_point_2d_norm[0];
                 self.gaze_y_sum += sample.gaze_point_2d_norm[1];
                 self.eye_x_sum += (sample.eye_origin_L_mm[0] + sample.eye_origin_R_mm[0]) / 2.0;

@@ -4,6 +4,36 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [Unreleased] — v0.2.4 (eye-viz validity + cal progress UI)
+
+Fixes the eye visualization at the upper screen edge and improves the
+calibration progress indicator.
+
+### Fixed
+- **Eye visualization plausibility gate** — `eye2dPlausible()` in `main.zig`
+  and `calibration.zig` now reject the device's `(0,0)` zero-vector (sent when
+  `validity=4`) *and* the `(−1,−1)` no-tracking sentinel, while accepting any
+  finite per-eye 2D coords (which legitimately exceed `[0,1]` at screen edges).
+  - `onGaze` now only updates per-eye viz coords when plausible, keeping the
+    last known position when an eye is lost. This fixes the "eye jumps to the
+    left edge at the upper 10–15% of the screen" bug (the `(0,0)` sentinel was
+    previously affine-corrected to the left edge).
+  - `Calibrator.feedSample` uses the same per-eye plausibility gate so corner
+    calibration frames are accepted when the eye-origin validity flips.
+- **Track-box investigation (2026-08-23)** — daemon debug capture of the
+  device's per-output 2D validity flags (`0x1d`/`0x1e`/`0x1f`) confirmed that
+  when an eye is lost (`validity=4`) the device sends `2D=(0,0)` *and* a
+  per-output validity of `0` — there is **no valid tracking data** for the lost
+  eye. The intermittent single-eye loss at screen edges is a genuine ET5
+  clip-mount **hardware FOV/track-box limit**, not a software bug. The display
+  area was verified correct (EDID 800×330 mm matches config).
+
+### Changed
+- **Calibration progress UI** — removed the centered "Capturing: n/180"
+  counter above the dot; added a green progress ring around the dot (arc sweep
+  = `cap_n/SAMPLES_PER_POINT`) and a small counter below the dot at `py+60`
+  (14 px, semi-transparent green).
+
 ## [v0.2.2] — TobiiArgus branding (2026-08-22)
 
 Product identity: the project is now named **TobiiArgus** (Argus, the all-

@@ -345,6 +345,15 @@ fn sendPacket(v: [6]f64) void {
     };
 }
 
+/// Returns true if the per-eye 2D gaze coordinates are plausible (not the
+/// device's −1.0/−1.0 no-tracking sentinel, not the zero-vector (0,0) used
+/// when validity=4). The device emits −1.0/−1.0 for untracked eyes and (0,0)
+/// when validity=4. At screen edges coords legitimately exceed [0,1] (looking
+/// above/below screen), so we only reject sentinel/zero and accept any finite.
+fn eye2dPlausible(px: f64, py: f64) bool {
+    return !(px == -1.0 and py == -1.0) and !(px == 0.0 and py == 0.0) and std.math.isFinite(px) and std.math.isFinite(py);
+}
+
 fn onGaze(sample: *const core.GazeSample) void {
     g_frame_count += 1;
 
@@ -388,10 +397,25 @@ fn onGaze(sample: *const core.GazeSample) void {
     const y_off = g_stream_preset.gaze_y_offset;
     const y_scl = @max(g_stream_preset.gaze_y_scale, 0.1);
     g_gaze_norm = .{ sample.gaze_point_2d_norm[0], (sample.gaze_point_2d_norm[1] + y_off) / y_scl };
-    g_eye_l_norm = .{ sample.gaze_point_2d_L_norm[0], (sample.gaze_point_2d_L_norm[1] + y_off) / y_scl };
-    g_eye_r_norm = .{ sample.gaze_point_2d_R_norm[0], (sample.gaze_point_2d_R_norm[1] + y_off) / y_scl };
-    g_eye_l_valid = sample.validity_L == 0;
-    g_eye_r_valid = sample.validity_R == 0;
+    // Only update per-eye viz coords when eye is plausible (not lost).
+    // When eye is lost (validity=4), device sends raw=(0,0) which would
+    // place the dot at left edge after correction. Keep last known position.
+    const l_plausible = eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
+    const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
+    if (l_plausible) {
+        g_eye_l_norm = .{
+            sample.gaze_point_2d_L_norm[0],
+            @min(@max((sample.gaze_point_2d_L_norm[1] + y_off) / y_scl, -0.2), 1.2)
+        };
+    }
+    if (r_plausible) {
+        g_eye_r_norm = .{
+            sample.gaze_point_2d_R_norm[0],
+            @min(@max((sample.gaze_point_2d_R_norm[1] + y_off) / y_scl, -0.2), 1.2)
+        };
+    }
+    g_eye_l_valid = sample.validity_L == 0 or l_plausible;
+    g_eye_r_valid = sample.validity_R == 0 or r_plausible;
     g_trail[g_trail_head] = g_gaze_norm;
     g_trail_head = (g_trail_head + 1) % TRAIL_LEN;
     g_lock.unlock();
@@ -859,6 +883,15 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     c.cairo_arc(cr, px, py, dot_r, 0, 2.0 * 3.14159265);
     c.cairo_fill(cr);
 
+    // Green progress ring around the dot during capturing.
+    if (st == .capturing) {
+        const sweep = 2.0 * 3.14159265 * (@as(f64, @floatFromInt(cap_n)) / @as(f64, @floatFromInt(calibration.SAMPLES_PER_POINT)));
+        c.cairo_set_source_rgb(cr, 0.2, 1.0, 0.4);
+        c.cairo_set_line_width(cr, 4);
+        c.cairo_arc(cr, px, py, dot_r + 6, -3.14159265 * 0.5, -3.14159265 * 0.5 + sweep);
+        c.cairo_stroke(cr);
+    }
+
     // Progress bar at bottom.
     const bar_h: f64 = 4;
     const w_f = @as(f64, @floatFromInt(width));
@@ -890,18 +923,18 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
         c.cairo_set_source_rgb(cr, 1.0, 0.85, 0.1); // bright yellow on dark bg
         calShowText(cr, "press SPACE");
     }
-    // Capturing counter above the dot in green.
+    // Small capturing counter below the dot (slot free during .capturing).
     if (st == .capturing) {
         var cap_buf: [48]u8 = undefined;
-        if (std.fmt.bufPrint(&cap_buf, "Capturing: {d}/{}", .{
+        if (std.fmt.bufPrint(&cap_buf, "{d}/{}", .{
             cap_n, calibration.SAMPLES_PER_POINT,
         })) |cap| {
-            c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
-            c.cairo_set_font_size(cr, 20);
+            c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+            c.cairo_set_font_size(cr, 14);
             var ext2: c.cairo_text_extents_t = undefined;
             calMeasureText(cr, cap, &ext2);
-            c.cairo_move_to(cr, (w_f - ext2.width) / 2.0, py - 40);
-            c.cairo_set_source_rgb(cr, 0.2, 1.0, 0.4);
+            c.cairo_move_to(cr, (w_f - ext2.width) / 2.0, py + 60);
+            c.cairo_set_source_rgba(cr, 0.5, 0.9, 0.5, 0.7); // subtle green
             calShowText(cr, cap);
         } else |_| {}
     }

@@ -41,8 +41,8 @@ BATCH_6_WIZARD:
   FIXES_APPLIED: SAMPLES_PER_POINT 60->180 (longer capture window); cal points inset from 5% to 15% (top corners).
 
 BATCH_7_LEDGER:
-  - [ ] .docs/tech-debt.yaml: close cal-apply-verify / wizard-qa-gate; log launcher PATH + cal-point-inset + viz-affine fixes
-  - [ ] .docs/release.yaml + session.yaml updated
+  - [x] .docs/tech-debt.yaml: close cal-apply-verify / wizard-qa-gate; log launcher PATH + cal-point-inset + viz-affine fixes
+  - [x] .docs/release.yaml + session.yaml updated
   FOLLOWUP_SUGGESTION: "just install-local recipe automating build->copy->stamp"
 
 FIXES_APPLIED_THIS_SESSION:
@@ -51,3 +51,32 @@ FIXES_APPLIED_THIS_SESSION:
   - cal-window-180: SAMPLES_PER_POINT 60->180 for corner re-acquire
   - cal-points-inset: top corners moved from 5% to 15% from edges
   - old-presets-deleted: ~/.config/tobiifree-opentrack/presets.json removed
+
+# =====================================================================
+# v0.2.4 — eye-viz validity fix + calibration progress UI + track-box investigation
+# Approved 2026-08-23 by user (questions answered via /ask).
+BASE_COMMIT: "75ce1a4"
+
+BATCH_1_EYE_VALIDITY_GATE:
+  - [x] eye2dPlausible helper (rejects −1.0/−1.0 sentinel AND (0,0) zero-vector; accepts finite) in main.zig + calibration.zig
+  - [x] onGaze: g_eye_l_valid/R_valid = validity==0 OR per-eye 2D plausible; only update per-eye viz coords when plausible (keep last position when lost -> no jump to left edge)
+  - [x] Calibrator.feedSample: combined per-eye plausibility gate (validity==0 OR plausible 2D)
+  - [x] Bridge ReleaseSafe build PASS (NFS pattern); driver zig build test PASS
+
+BATCH_2_CAL_PROGRESS_UI:
+  - [x] Removed centered 'Capturing: n/180' above dot
+  - [x] Green progress ring around dot (dot_r+6, lw 4, sweep=cap_n/SAMPLES_PER_POINT)
+  - [x] Small counter at py+60 (14px, semi-transparent green)
+
+BATCH_3_TRACK_BOX_INVESTIGATION:
+  - [x] Daemon debug capture of 0x1d/0x1e/0x1f per-output 2D validity
+  - [x] CONFIRMED: lost eye sends 2D=(0,0) AND per-output validity=0 (0x1e for R, 0x1d for L) — NO valid data for lost eye
+  - [x] CONFIRMED: track box correctly configured (EDID 800x330mm == config); device tracks both eyes at y=1.39 some frames
+  - [x] CONCLUSION: one-eye loss at edges = genuine ET5 FOV/track-box hardware limit; original 'jumps to left edge' code bug FIXED
+  - [x] Driver debug logging removed (tobiifree_core.zig clean); daemon rebuilt ReleaseSafe
+
+BATCH_4_LEDGER:
+  - [x] .docs/tech-debt.yaml: cal-point-inset + viz-eye-validity-false-positive + cal-progress-ui resolved-v0.2.4; tracking-box conclusion logged
+  - [x] .docs/session.yaml: goals/completed + RUNTIME_STATE + NEXT_STEPS updated
+  - [x] .docs/release.yaml: v0.2.4 tagged + pushed
+  - [x] Driver zig build test PASS; bridge + daemon ReleaseSafe builds PASS

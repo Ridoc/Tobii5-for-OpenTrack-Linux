@@ -9,6 +9,7 @@ TAGS:
   v0.2.0: "released (commit bf2bf2c, tag + push done; GitHub release created)"
   v0.2.2: "tagged (commit 53342db, TobiiArgus branding); E2E test session 2026-08-22"
   v0.2.3: "tagged (commit 75ce1a4, E2E test fixes); E2E test session 2026-08-22"
+  v0.2.4: "tagged (eye-viz validity fix + cal-progress-ui + track-box investigation docs); 2026-08-23"
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
@@ -34,4 +35,5 @@ HISTORY_NOTES:
   - "Branch has 38 commits through v0.1.1 + 2 more for v0.2.0 arc (docs + code)."
   - "v0.2.2 E2E test session 2026-08-22: QA PASS, daemon OK, bridge GUI OK (title/icon/emulated-note), UDP OK (262 packets, 48B, sane values), wizard OK (with fixes)."
   - "v0.2.2 fixes applied: gaze-viz-affine-fix, cal-window-180, cal-points-inset, emulated-headtracking-note, old-presets-deleted."
-  - "Known: calibration capture fails at extreme corners despite valid ET5 tracking (cal-point-inset workaround applied; root cause investigation pending)."
+  - "v0.2.4 fixes applied: eye-viz plausibility gate (reject −1.0 sentinel AND (0,0) zero-vector, accept finite; keep last position when eye lost), cal-progress-ui (green ring + counter below dot). Track-box investigation CONFIRMED one-eye loss at edges is ET5 hardware FOV/track-box limit (device sends no valid data for lost eye: 2D=(0,0), per-output validity=0)."
+  - "Known: ET5 clip-mount hardware FOV/track-box limit causes intermittent single-eye loss at screen edges (device reports no valid data for the lost eye); bridge shows red dot at last position. Not fixable in software."
