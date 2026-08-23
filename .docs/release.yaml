@@ -9,7 +9,7 @@ TAGS:
   v0.2.0: "released (commit bf2bf2c, tag + push done; GitHub release created)"
   v0.2.2: "tagged (commit 53342db, TobiiArgus branding); E2E test session 2026-08-22"
   v0.2.3: "tagged (commit 75ce1a4, E2E test fixes); E2E test session 2026-08-22"
-  v0.2.4: "tagged (eye-viz validity fix + cal-progress-ui + track-box investigation docs); 2026-08-23"
+  v0.2.4: "tagged (commit 2a1ca2c, eye-viz validity fix + cal-progress-ui + track-box investigation docs); 2026-08-23"
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
