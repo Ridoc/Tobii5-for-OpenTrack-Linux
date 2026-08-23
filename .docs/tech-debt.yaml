@@ -46,7 +46,15 @@ ITEMS:
   - id: "nfs-build-quirk"
     severity: "medium"
     status: "accepted-workaround"
-    detail: "Zig cache atomic rename fails on NFS (/mnt/NAS-Zeno); workaround --cache-dir /tmp/zig-local-cache-* + manual binary copy to zig-out."
+    detail: |
+      Zig cache atomic rename fails on NFS (/mnt/NAS-Zeno) when installing artifacts to project-local zig-out/.
+      WORKAROUND (verified 2026-08-23): Build with `--cache-dir /tmp/zig-local-cache-<app>` (local filesystem), then manually copy executable from cache to `.zig-local/<app>/bin/`.
+      - build: `cd applications/<app> && zig build -Doptimize=ReleaseSafe --cache-dir /tmp/zig-local-cache-<app>`
+      - copy daemon: `cp /tmp/zig-local-cache-tobiifreed/o/<hash>/tobiifreedot .zig-local/tobiifreed/bin/`
+      - copy bridge: `cp /tmp/zig-local-cache-bridge/o/<hash>/tobiifree-opentrack .zig-local/tobiifree-opentrack/bin/`
+      - run from: `.zig-local/<app>/bin/` (gitignored)
+      - .zig-local/ is gitignored; plain file copies onto NAS work fine
+      - avoids all NFS atomic rename issues; write BUILD_INFO.txt (git rev + build date) per zig-out/ to distinguish stale vs fresh binary
   - id: "hibernation-usb"
     severity: "medium"
     status: "accepted-workaround"

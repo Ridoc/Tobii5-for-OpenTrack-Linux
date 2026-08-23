@@ -9,6 +9,7 @@
 
 .zig-cache/
 zig-out/
+.zig-local/
 
 node_modules/
 dist/
