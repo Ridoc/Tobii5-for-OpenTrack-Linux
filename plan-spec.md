@@ -15,7 +15,8 @@ CONTEXT:
     flow (raw device-space averages → add_calibration_point — device interprets in
     its own display space), geometry from defaultFromEdid.
   - KNOWN-ISSUE: bridge onDaemonResponse saw payload_len=164 (expected 112) — root
-    cause UNVERIFIED. Investigate before fixing (may be header miscount, not daemon).
+    cause VERIFIED: daemon checked payload_len == 72 on RAW TTP payload, but TLV-encoded
+    3×point3d = ~164B. Condition failed, raw TLV sent instead of extended 112B. FIXED.
   - KNOWN-ISSUE: user-reported upper↔down dot oscillation NOT explained by any
     static code path — must be explained by runtime trace before closing.
 
@@ -72,9 +73,9 @@ BATCH_4_CLEANUP: # DONE (2026-08-23 session)
   - [x] Kept minimal payload_len diagnostic for get_display_area (for BATCH_3)
 
 BATCH_5_QA_GATE: # NEXT SESSION
-  - [ ] Bridge ReleaseSafe build PASS (NFS cache pattern) — done locally
-  - [ ] Daemon ReleaseSafe build PASS (NFS cache pattern) — untouched, should pass
-  - [ ] Driver zig build test PASS — untouched, should pass
+  - [x] Bridge ReleaseSafe build PASS (NFS cache pattern) — done locally
+  - [x] Daemon ReleaseSafe build PASS (NFS cache pattern) — untouched, should pass
+  - [x] Driver zig build test PASS — untouched, should pass
   - [ ] RUNTIME TRACE: log raw_dev → phys → affine → gui for ~10s live session;
         EXPLAIN the upper↔down oscillation empirically before close
   - [ ] Manual (ET5 hardware): center stare → dot at center; edge glance → UDP
@@ -92,8 +93,7 @@ NOTES:
     These are the verified baseline + implemented fixes.
 
 HANDOVER STATUS (2026-08-23):
-  - BATCH_1 + BATCH_2 + BATCH_4 COMPLETE. Code compiles (zig 0.15.2).
+  - BATCH_1 + BATCH_2 + BATCH_3 + BATCH_4 COMPLETE. Code compiles (zig 0.15.2).
   - Binary parked at applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack
     with BUILD_INFO.txt stamp.
-  - NEXT AGENT: Start with BATCH_3 framing investigation (read socket_source.zig
-    + daemon_protocol.zig), then BATCH_5 QA on real ET5 hardware.
+  - NEXT AGENT: BATCH_5 QA on real ET5 hardware (runtime trace + manual verification).
