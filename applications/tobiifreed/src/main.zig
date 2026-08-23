@@ -1,15 +1,16 @@
 // tobiifreedot (TobiiFreedOT) — eye tracker daemon.
 //
-// Owns the USB connection to the Tobii ET5 and exposes gaze data
-// over a unix socket. Multiple clients can connect simultaneously.
-//
-// Usage:
-//   tobiifreedot                  # run with defaults or ~/.config/tobii.json
-//   tobiifreedot --init-config    # create default config file
-//
-// Upstream: Aetherall/tobiifree (https://github.com/Aetherall/tobiifree)
-// by Aetherall — GPL-3.0. This is a renamed fork of the upstream
-// `tobiifreed` daemon; see LICENSE and README for credits.
+/// Owns the USB connection to the Tobii ET5 and exposes gaze data
+/// over a unix socket. Multiple clients can connect simultaneously.
+///
+/// Usage:
+///   tobiifreedot                  # run with defaults or ~/.config/tobii.json
+///   tobiifreedot --init-config    # create default config file
+///   tobiifreedot --track-box-factor=2.5  # override track box expansion factor
+///
+/// Upstream: Aetherall/tobiifree (https://github.com/Aetherall/tobiifree)
+/// by Aetherall — GPL-3.0. This is a renamed fork of the upstream
+/// `tobiifreed` daemon; see LICENSE and README for credits.
 
 const std = @import("std");
 const core = @import("tobiifree_core");
@@ -35,6 +36,9 @@ var tracker: Tracker = undefined;
 var server: Server = undefined;
 var ws: ?WsServer = null;
 var quit: bool = false;
+
+// Full config loaded at startup (for extended get_display_area response).
+var full_cfg: da_config.FullConfig = undefined;
 
 // ── Gaze ring buffer: USB thread → main thread ─────────────────────
 //
@@ -135,9 +139,20 @@ fn onResponse(request_id: u32, payload_ptr: [*]const u8, payload_len: u32) void 
         return;
     };
 
-    const payload = payload_ptr[0..payload_len];
+    // For get_display_area, extend the 9-corner response with physical_screen dims.
+    var extended_payload: [88]u8 = undefined;
+    var payload_to_send: []const u8 = payload_ptr[0..payload_len];
+    if (entry.cmd_type == @intFromEnum(proto.Cmd.get_display_area) and payload_len == 72) {
+        @memcpy(extended_payload[0..72], payload_ptr[0..72]);
+        const phys_w = full_cfg.physical_screen.w_mm;
+        const phys_h = full_cfg.physical_screen.h_mm;
+        @memcpy(extended_payload[72..80], std.mem.asBytes(&phys_w));
+        @memcpy(extended_payload[80..88], std.mem.asBytes(&phys_h));
+        payload_to_send = extended_payload[0..88];
+    }
+
     var buf: [proto.HEADER_SIZE + 1 + 8192]u8 = undefined;
-    const msg_len = proto.encodeResponse(&buf, entry.cmd_type, payload);
+    const msg_len = proto.encodeResponse(&buf, entry.cmd_type, payload_to_send);
 
     if (entry.is_ws) {
         if (ws) |*w| {
@@ -256,17 +271,16 @@ fn sendResult(client_fd: std.posix.fd_t, cmd_type: u8, is_ws: bool, ok: bool, pa
 
 // ── Config loading (via shared display_area_config module) ──────────
 
-fn loadDisplayArea() Tracker.DisplayArea {
-    const home = std.posix.getenv("HOME") orelse return .{};
+fn loadFullConfig() da_config.FullConfig {
+    const home = std.posix.getenv("HOME") orelse return da_config.defaultFullConfig();
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return .{};
-    const cfg = da_config.loadFromFile(path);
-    return da_config.toTrackerDisplayArea(cfg, Tracker.DisplayArea);
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return da_config.defaultFullConfig();
+    return da_config.loadFromFile(path, std.heap.page_allocator) catch da_config.defaultFullConfig();
 }
 
 // ── --init-config ──────────────────────────────────────────────────
 
-fn initConfig() void {
+fn initConfig(factor: f64) void {
     const home = std.posix.getenv("HOME") orelse {
         log.err("$HOME not set", .{});
         return;
@@ -275,15 +289,16 @@ fn initConfig() void {
     const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, CONFIG_PATH }) catch return;
     if (std.fs.cwd().access(path, .{})) |_| {
         log.info("{s} already exists", .{path});
+        return;
     } else |_| {
         // Detect screen dimensions from EDID.
         const edid = da_config.detectEdid();
         const cfg = if (edid) |e| blk: {
             log.info("EDID detected: {s} {d:.0}×{d:.0}mm", .{ e.connected_name orelse "unknown", e.width_mm, e.height_mm });
-            break :blk da_config.defaultFromEdid(e);
+            break :blk da_config.defaultFromEdid(e, factor);
         } else blk: {
             log.warn("no EDID detected, using fallback dimensions", .{});
-            break :blk da_config.DisplayAreaConfig{};
+            break :blk da_config.defaultFullConfig();
         };
 
         var dir_buf: [512]u8 = undefined;
@@ -295,15 +310,17 @@ fn initConfig() void {
         };
         defer file.close();
 
-        var json_buf: [1024]u8 = undefined;
+        var json_buf: [2048]u8 = undefined;
         const json = da_config.toJsonString(cfg, &json_buf) orelse return;
         file.writeAll(json) catch |err| {
             log.err("write config: {}", .{err});
             return;
         };
-        log.info("created {s}: {d:.0}×{d:.0}mm z={d:.0}mm tilt={d:.1}°", .{
-            path, cfg.w_mm, cfg.h_mm, cfg.z_mm, cfg.tilt_deg,
-        });
+        log.info("created {s}: physical {d:.0}×{d:.0}mm, device {d:.0}×{d:.0}mm z={d:.0}mm tilt={d:.1}° factor={d:.1}",
+            .{ path, cfg.physical_screen.w_mm, cfg.physical_screen.h_mm,
+               cfg.device_display_area.w_mm, cfg.device_display_area.h_mm,
+               cfg.device_display_area.z_mm, cfg.device_display_area.tilt_deg,
+               cfg.device_display_area.track_box_factor });
     }
 }
 
@@ -357,12 +374,13 @@ pub fn main() void {
     var ws_port: u16 = 7081;
     var ws_enabled: bool = false;
     var force_display_area: bool = false;
+    var track_box_factor: f64 = 2.5;
 
     var args = std.process.args();
     _ = args.next();
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--init-config")) {
-            initConfig();
+            initConfig(2.5);
             return;
         } else if (std.mem.eql(u8, arg, "--force-display-area")) {
             force_display_area = true;
@@ -375,19 +393,43 @@ pub fn main() void {
                 }
                 parseWsArg(ws_arg, &ws_addr, &ws_port);
             }
+        } else if (std.mem.eql(u8, arg, "--track-box-factor")) {
+            if (args.next()) |factor_arg| {
+                if (std.fmt.parseFloat(f64, factor_arg)) |f| {
+                    track_box_factor = f;
+                } else |_| {}
+            }
         }
     }
 
     // Load config.
-    const display = loadDisplayArea();
-    log.info("display_area {d:.0}x{d:.0}mm  origin=({d:.0},{d:.0})  z={d:.0}  tilt={d:.2}", .{
-        display.w_mm, display.h_mm, display.ox_mm, display.oy_mm, display.z_mm, display.tilt_deg,
-    });
+    full_cfg = loadFullConfig();
+    // Override track_box_factor from CLI if provided
+    full_cfg.device_display_area.track_box_factor = track_box_factor;
 
-    if (display.z_mm == 0) {
-        log.warn("display_area z_mm=0 — gaze coordinates will be garbage!", .{});
-        log.warn("run `tobiifreedot --init-config` to auto-detect your screen", .{});
-    }
+    // Recompute device display area with the (possibly overridden) factor
+    const factor = track_box_factor;
+    const dev_w = full_cfg.physical_screen.w_mm * factor;
+    const dev_h = full_cfg.physical_screen.h_mm * factor;
+    const half_dev_w = dev_w / 2.0;
+    const half_dev_h = dev_h / 2.0;
+    const cy = -half_dev_h + 10.0;
+
+    full_cfg.device_display_area = .{
+        .w_mm = dev_w,
+        .h_mm = dev_h,
+        .z_mm = 65,
+        .tilt_deg = 12,
+        .ox_mm = -half_dev_w,
+        .oy_mm = -cy - half_dev_h,
+        .track_box_factor = factor,
+    };
+
+    log.info("display_area {d:.0}x{d:.0}mm  origin=({d:.0},{d:.0})  z={d:.0}  tilt={d:.2}  factor={d:.1}",
+        .{ full_cfg.device_display_area.w_mm, full_cfg.device_display_area.h_mm,
+           full_cfg.device_display_area.ox_mm, full_cfg.device_display_area.oy_mm,
+           full_cfg.device_display_area.z_mm, full_cfg.device_display_area.tilt_deg,
+           factor });
 
     // Open USB transport.
     transport = LibusbTransport.init() catch |err| {
@@ -407,14 +449,15 @@ pub fn main() void {
     };
     defer tracker.deinit();
 
-    // Apply display area from config.
+    // Apply display area from config (expanded device display area).
     if (force_display_area or tracker.display.isReset()) {
         if (force_display_area) {
             log.info("force-applying display area from config", .{});
         } else {
             log.info("device display area looks reset, applying config", .{});
         }
-        if (!tracker.setDisplayArea(display)) {
+        const da = da_config.toTrackerDisplayArea(full_cfg.device_display_area, Tracker.DeviceDisplayArea);
+        if (!tracker.setDisplayArea(da)) {
             log.warn("failed to set display area from config", .{});
         }
     } else {

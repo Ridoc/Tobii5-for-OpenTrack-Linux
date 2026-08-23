@@ -11,6 +11,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Display area config (shared EDID + config loading).
+    const display_area_config = b.createModule(.{
+        .root_source_file = b.path("../../driver/src/display_area_config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Tracker module (transport-agnostic).
     const tracker = b.createModule(.{
         .root_source_file = b.path("../../driver/src/tracker.zig"),
@@ -18,14 +25,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "tobiifree_core", .module = tobiifree_core },
+            .{ .name = "display_area_config", .module = display_area_config },
         },
-    });
-
-    // Display area config (shared EDID + config loading).
-    const display_area_config = b.createModule(.{
-        .root_source_file = b.path("../../driver/src/display_area_config.zig"),
-        .target = target,
-        .optimize = optimize,
     });
 
     // Libusb transport.

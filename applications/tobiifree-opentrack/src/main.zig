@@ -43,6 +43,13 @@ var g_opts: Options = .{};
 var g_udp_fd: std.posix.socket_t = undefined;
 var g_dst: std.net.Address = undefined;
 
+/// Physical screen dimensions from daemon (for affine correction and GUI).
+/// Populated by get_display_area response after connecting to daemon.
+var g_physical_screen: ?da_config.PhysicalScreen = null;
+
+/// Track box factor override from CLI (forwarded to daemon).
+var g_track_box_factor: f64 = 2.5;
+
 // Tobii-feel pipeline + preset storage (arena-backed, lives for app lifetime).
 var g_pipeline: tobii.TobiiPipeline = .{};
 var g_presets_arena: std.heap.ArenaAllocator = undefined;
@@ -1102,20 +1109,13 @@ fn calFeedGaze(sample: *const proto.GazeSample) void {
 }
 
 /// Stream-thread side: runs once all points are captured. Sends the device
-/// calibration sequence, persists the display-area geometry, then waits for
-/// the daemon's finish_calibration blob reply (see onDaemonResponse).
+/// calibration sequence, then waits for the daemon's finish_calibration blob
+/// reply (see onDaemonResponse).
 fn sendCalibrationToDaemon() void {
     g_cal_mutex.lock();
     g_calibrator.state = .waiting_response;
     var results: [calibration.NUM_CAL_POINTS][2]f64 = undefined;
     for (0..calibration.NUM_CAL_POINTS) |i| results[i] = g_calibrator.result_gaze[i];
-    const da = blk: {
-        const edid = da_config.detectEdid();
-        break :blk g_calibrator.computeDisplayArea(
-            if (edid) |e| e.width_mm else 800,
-            if (edid) |e| e.height_mm else 330,
-        );
-    };
     g_cal_mutex.unlock();
 
     const sock = g_cal_socket orelse {
@@ -1135,12 +1135,12 @@ fn sendCalibrationToDaemon() void {
     }
     sock.sendCommand(.finish_calibration, &.{});
 
-    log.info("calibration result: {d:.0}x{d:.0}mm z={d:.1} tilt={d:.1}°", .{
-        da.w_mm, da.h_mm, da.z_mm, da.tilt_deg,
-    });
-    da_config.saveToFile(da.w_mm, da.h_mm, da.ox_mm, da.oy_mm, da.z_mm, da.tilt_deg) catch |e| {
-        log.err("failed to save calibration config: {}", .{e});
-    };
+    // NOTE: With the new architecture (v0.2.5), the device display area is
+    // recomputed from physical_screen × track_box_factor on every daemon start.
+    // Calibration only adjusts the device's internal gaze estimation (via the
+    // calibration blob). The bridge's affine correction (gaze_y_offset/scale)
+    // is a preset parameter, not a calibration result. Nothing to persist here.
+    log.info("calibration sent to device; awaiting blob reply", .{});
 
     // Window stays open ("Applying…") until the blob reply arrives; if it
     // never does, calWaitTimeout closes after 4 s.
@@ -1149,7 +1149,23 @@ fn sendCalibrationToDaemon() void {
 
 /// Stream-thread side (called during socket poll): daemon replied to our
 /// finish_calibration — stash the blob, send it back as cal_apply, close.
+/// Also handles get_display_area to get physical_screen dimensions.
 fn onDaemonResponse(cmd_type: u8, payload: []const u8) void {
+    if (cmd_type == @intFromEnum(proto.Cmd.get_display_area)) {
+        // Extended response: 11 f64 = 88 bytes (9 corners + physical_screen w_mm, h_mm)
+        if (payload.len == 88) {
+            var phys_w_bits: u64 = 0;
+            var phys_h_bits: u64 = 0;
+            @memcpy(std.mem.asBytes(&phys_w_bits), payload[72..80]);
+            @memcpy(std.mem.asBytes(&phys_h_bits), payload[80..88]);
+            const phys_w: f64 = @bitCast(phys_w_bits);
+            const phys_h: f64 = @bitCast(phys_h_bits);
+            g_physical_screen = da_config.PhysicalScreen{ .w_mm = phys_w, .h_mm = phys_h };
+            log.info("received physical screen: {d:.0}×{d:.0}mm", .{ phys_w, phys_h });
+        }
+        return;
+    }
+
     if (cmd_type != @intFromEnum(proto.Cmd.finish_calibration)) return;
 
     g_cal_mutex.lock();
@@ -1619,6 +1635,14 @@ fn parseArgs() void {
             g_opts.p.flip_yaw = true;
         } else if (std.mem.eql(u8, arg, "--flip-pitch")) {
             g_opts.p.flip_pitch = true;
+        } else if (std.mem.eql(u8, arg, "--track-box-factor")) {
+            const factor_arg = needArg(&args, arg);
+            if (std.fmt.parseFloat(f64, factor_arg)) |f| {
+                g_track_box_factor = f;
+            } else |_| {
+                usage();
+                std.process.exit(2);
+            }
         } else if (std.mem.eql(u8, arg, "--no-position")) {
             g_opts.p.send_position = false;
         } else if (std.mem.eql(u8, arg, "--headless")) {
@@ -1712,9 +1736,13 @@ pub fn main() void {
     };
     defer g_socket.deinit();
 
-    g_socket.onGaze(onGaze);
-    g_socket.onResponse(onDaemonResponse); // calibration blob replies
+g_socket.onGaze(onGaze);
+    g_socket.onResponse(onDaemonResponse); // calibration blob replies + get_display_area
     g_cal_socket = &g_socket; // expose socket for calibration wizard
+
+    // Request physical screen dimensions from daemon (extended get_display_area response).
+    g_socket.sendCommand(proto.Cmd.get_display_area, &[_]u8{});
+
     installSignalHandlers();
 
     log.info("streaming gaze → udp {s}:{d}  (preset {s})", .{ g_opts.host, g_opts.port, g_opts.p.name });

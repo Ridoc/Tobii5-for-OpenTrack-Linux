@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const core = @import("tobiifree_core");
+const dac = @import("display_area_config");
 
 const log = std.log.scoped(.tracker);
 
@@ -45,17 +46,9 @@ pub const Tracker = struct {
         }
     };
 
-    /// Rect+tilt parameterisation used by config files. Converted to corners
-    /// for the handshake set_display_area command.
-    pub const DisplayArea = struct {
-        w_mm: f64 = 1500,
-        h_mm: f64 = 1000,
-        ox_mm: f64 = -750,
-        oy_mm: f64 = -500,
-        z_mm: f64 = 0,
-        /// Screen tilt in degrees: 0 = flush, negative = tilted toward user, positive = tilted away.
-        tilt_deg: f64 = 0,
-    };
+    /// Rect+tilt parameterisation for device display area (track box).
+    /// Uses clip-mount geometry (z=65, tilt=12) expanded beyond physical screen.
+    pub const DeviceDisplayArea = dac.DeviceDisplayArea;
 
     pub const InitOptions = struct {
         send_fn: SendFn,
@@ -115,7 +108,7 @@ pub const Tracker = struct {
     }
 
     /// Set display area from rect+tilt config. Sends to device and reads back.
-    pub fn setDisplayArea(self: *Tracker, d: DisplayArea) bool {
+    pub fn setDisplayArea(self: *Tracker, d: DeviceDisplayArea) bool {
         const angle = d.tilt_deg * (std.math.pi / 180.0);
         const cos_a = @cos(angle);
         const sin_a = @sin(angle);
