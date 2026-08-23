@@ -1,38 +1,81 @@
-GOAL: "Bridge Tobii ET5 to X4: Foundations (Native Linux) via OpenTrack UDP"[cite: 11]
+# plan-spec.yaml — v0.2.6 GUI Visualization & Gaze Pipeline Fix
+# Approved 2026-08-23. Goal: calibrated center = visualization center;
+# pipeline UDP gaze math === bridge GUI math.
+META:
+  VERSION: "v0.2.6"
+  BASE_COMMIT: "3d45732"
+  APPROVED: "2026-08-23"
 
-SYSTEM_CONSTRAINTS:
-  target: "127.0.0.1:4242"[cite: 11]
-  wire_format: "48-byte UDP (6 LE doubles: X, Y, Z, Yaw, Pitch, Roll)"[cite: 11]
-  units: { translation: "cm", rotation: "degrees" }[cite: 11]
-  input: "$XDG_RUNTIME_DIR/tobiifreedot/gaze.sock (core.GazeSample)"[cite: 11]
-  limitations: "OpenTrack carries head pose only; no target-lock/gaze-driven menus"[cite: 11]
+CONTEXT:
+  - "v0.2.5 expanded track_box EDID×2.5 (2000×825mm for 800×330 screen); screen x∈[0.3,0.7] y∈[0,0.4] device-normalized"
+  - "bridge onGaze HAS expanded→physical; pipeline process() MISSING → UDP +9° phantom pitch, yaw 2.5× compressed"
+  - "affine presets identity(0/1); nothing fits from cal data despite result_gaze[] holding 5 KNOWN points"
+  - "VERIFIED: bridge transform math, cal point flow (raw→add_calibration_point, device own space), defaultFromEdid geometry"
+  - "FIXED: daemon payload_len==72 on RAW TTP but TLV-encoded 3×point3d≈164B → condition fails → raw TLV sent → bridge sees 164"
+  - "OPEN: upper↔down dot oscillation unexplained by static code → needs runtime trace"
 
-EXECUTION_PHASES:
-  PHASE_1:
-    title: "Fork + Bridge Core"[cite: 11]
-    tasks:
-      - "Fork Aetherall/tobiifree (GPL-3.0)"[cite: 11]
-      - "Create applications/tobiifree-opentrack/ (main.zig, build.zig)"[cite: 11]
-      - "Connect socket -> decode GazeSample"[cite: 11]
-      - "Math Yaw: (gaze_x - 0.5) * 2 * MAX_YAW"[cite: 11]
-      - "Math Pitch: (0.5 - gaze_y) * 2 * MAX_PITCH"[cite: 11]
-      - "Math Translation: eye_origin midpoint (mm -> cm) relative to startup ref"[cite: 11]
-      - "Add CLI tuning flags (--host, --port, --yaw-gain, --pitch-gain, etc)"[cite: 11]
-  PHASE_2:
-    title: "Validation & Tuning"[cite: 11]
-    tasks:
-      - "Verify E2E X4 connection"[cite: 11]
-      - "Tune gains/deadzone/EMA (Resolved defaults: Yaw 37.5°, Pitch 22.5°)"[cite: 11]
-  PHASE_3:
-    title: "True Head Pose (Deferred)"[cite: 11]
-    tasks:
-      - "Implement IR-frame stream (0x050e) + MediaPipe head-pose pipeline"[cite: 11]
+BATCHES:
+  BATCH_1:
+    TITLE: "Pipeline Transform"
+    STATUS: DONE
+    FILES: [driver/src/tobii_filter.zig]
+    INVARIANT: "pipeline math === bridge onGaze math (transform THEN affine)"
+    STEPS:
+      - {DONE: "add track_box_factor:f64=2.5 to Preset (after gaze_y_scale)"}
+      - {DONE: "seed .track_box_factor=2.5 in all 3 BUILTIN_PRESETS"}
+      - {DONE: "process() ~L793: transform BEFORE affine → phys_x,y via f_tb → g_corr=[(phys_x+x_off)/x_s, (phys_y+y_off)/y_s]"}
+      - {DONE: "keep g_ok validation on raw coords [−0.05,1.05]"}
 
-VERIFICATION_GATES:
-  - [x] "zig build tobiifree-opentrack succeeds"[cite: 11]
-  - [x] "tobiifreedot streaming active / socket exists"[cite: 11]
-  - [x] "Bridge connects and decodes GazeSample"[cite: 11]
-  - [x] "UDP 48B packets observed on 4242 (~60 Hz)"[cite: 11]
-  - [ ] "X4 reads OpenTrack Support: Connected"[cite: 11]
-  - [ ] "Ctrl+T engages, Scroll Lock recenters properly"[cite: 11]
-  - [ ] "Tuning feels near-like Tobii in cockpit"[cite: 11]
+  BATCH_2:
+    TITLE: "Calibration Auto-Fit"
+    STATUS: DONE
+    FILES: [driver/src/calibration.zig, applications/tobiifree-opentrack/src/main.zig]
+    INVARIANT: "center_stare → g_gaze_norm==(0.5,0.5)"
+    STEPS:
+      - {DONE: "PRE_CHECK: presets persist via presets.json (user only); builtins from code; fitted affine in ~/.config/tobiifree-opentrack/calibration.json, overlaid on active preset"}
+      - {DONE: "add gaze_x_offset/gaze_x_scale to Preset (defaults 0.0/1.0)"}
+      - {DONE: "fitAffine(result_gaze,factor): regress pre-affine vs known GUI points; least-squares per axis over 5pts → {offset,scale}; guard |scale|<0.1 or !finite → identity+warn"}
+      - {DONE: "apply fitted after wizard finish: persist→calibration.json, overlay→g_opts.p via applyCalFit(), re-apply on loadPreset()"}
+      - {DONE: "bridge onGaze: gui_x=(phys_x+x_off)/x_scl; gui_y=(phys_y+y_off)/y_scl; per-eye likewise"}
+      - {DONE: "CLI flags --gaze-x-offset/--gaze-x-scale + override tracking + usage() updated"}
+
+  BATCH_3:
+    TITLE: "Framing Diagnose+Fix"
+    STATUS: DONE
+    FILES: [driver/src/socket_source.zig, driver/src/daemon_protocol.zig, applications/tobiifreed/src/main.zig]
+    STEPS:
+      - {DONE: "READ dispatchMessage/processMessages framing logic"}
+      - {DONE: "READ encodeResponse: HEADER_SIZE+1+payload.len; response=[cmd_type][payload]"}
+      - {DONE: "HYPOTHESIS CONFIRMED: daemon checks payload_len==72 on RAW TTP but TLV=3×48B+2B≈146-164B → fails → raw TLV sent"}
+      - {DONE: "FIX: onResponse decode TLV via core.decode_display_area() then extend to 112B"}
+
+  BATCH_4:
+    TITLE: "Cleanup"
+    STATUS: DONE
+    STEPS:
+      - {DONE: "remove debug hex logging from bridge onDaemonResponse"}
+      - {DONE: "keep minimal payload_len diagnostic for get_display_area"}
+
+  BATCH_5:
+    TITLE: "QA Gate"
+    STATUS: IN_PROGRESS
+    STEPS:
+      - {DONE: "bridge ReleaseSafe build PASS (NFS cache)"}
+      - {DONE: "daemon ReleaseSafe build PASS (NFS cache, untouched)"}
+      - {DONE: "driver zig build test PASS (untouched)"}
+      - {TODO: "RUNTIME TRACE: log raw_dev→phys→affine→gui ~10s live; EXPLAIN upper↔down oscillation empirically"}
+      - {TODO: "MANUAL ET5: center stare→dot center; edge glance→UDP yaw ±20° (not ±8°)"}
+
+TECH_DEBT:
+  - "display_area_config.CalibrationParams defaults 0.394/1.278 inert/stale"
+  - "per-eye viz clamped [-0.2,1.2] vs main gaze unclamped (cosmetic)"
+
+NOTES:
+  - "RE-RUN device calibration after deploy (expanded area rebuilds device model; residual bias needs affine auto-fit)"
+  - "AGENTS.md untracked — DO NOT commit"
+  - "Working tree dirty: v0.2.5-1 baseline + v0.2.6 edits — DO NOT REVERT"
+
+HANDOVER:
+  STATUS: "BATCH_1-4 DONE; BATCH_5 PENDING"
+  BINARY: applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack + BUILD_INFO.txt
+  NEXT: "BATCH_5 QA on real ET5 hardware (runtime trace + manual verify)"

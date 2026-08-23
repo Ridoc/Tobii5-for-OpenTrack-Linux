@@ -2,7 +2,7 @@
 # O(1) direct lookup: route by domain → leaf spec.
 VERSION: "1.0"
 PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux (TobiiArgus)"
-UPDATED: "2026-08-21"
+UPDATED: "2026-08-23"
 
 PATH_ROUTES:
   /:

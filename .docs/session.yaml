@@ -1,9 +1,10 @@
 # session.yaml — current session state (last-known)
-UPDATED: "2026-08-22"
+UPDATED: "2026-08-23"
 SESSION_ID: "tobii-x4-docs"
 WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-reviewer -> librarian; skills read_skeleton + test-scrubber.sh"
 
 GOALS:
+  - completed: "YAML pseudocode migration (2026-08-23): plan-spec.md→plan-spec.yaml, all 7 agent bodies compressed to YAML pseudocode, both AGENTS.md compressed; 10 files, ~45% avg compression"
   - completed: "v0.1.1 shipped (EDID auto-detect, pre-curve deadzone, adaptive eye ratio)"
   - completed: "docs tree + documentation for existing repo (commit 6c9070a)"
   - completed: "v0.2.0 calibration-wizard release (QA PASS -> security PASS -> commit bf2bf2c -> tag/push -> GitHub release)"
