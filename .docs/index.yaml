@@ -2,11 +2,12 @@
 # O(1) direct lookup: route by domain → leaf spec.
 VERSION: "1.1"
 PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux (TobiiArgus)"
-UPDATED: "2026-08-23"
+UPDATED: "2026-08-29"
 
 PATH_ROUTES:
   /:
     - "README.md"
+    - "plan-spec.yaml (ACTIVE v0.2.7 plan — uncommitted working draft; next session executes it)"
   /docs:
     - "docs/x4-foundations-opentrack.md"
     - "docs/session-continuation.md"
@@ -40,3 +41,4 @@ DOMAIN_NOTES:
   RUNTIME_LIBUSB: "libusb 1.0.29 (/nix/store/rqflzdkgggyp4cvp7hlwwjdyph62shik-libusb-1.0.29/lib) required for daemon."
   DEBT_POLICY: "tech-debt.yaml = OPEN ONLY; confirmed resolutions (manual/user preferred) move to resolved.yaml. Low-confidence internal/QA-only stays OPEN."
   LESSONS_LEARNED: "→ gaze-transform.yaml §GAZE_Y_TRANSFORM_SAGA (Y-axis saga v0.1.1→v0.2.6). 3 transferable rules: (1) NEVER assume device axis origin/direction — confirm raw_y range + glance direction empirically BEFORE writing any transform; (2) a stale calibration.json (negative gaze_y_scale) silently flips Y — after ANY geometry change delete calibration.json + rerun wizard, verify gaze_y_scale positive; (3) single shared transform helper (core.deviceToGui) used by pipeline+GUI+fitAffine so all 3 paths agree — a wrong-direction base transform makes the wizard fitAxis reject the (negative) scale and silently no-op, so 'calibration never sticks' is a SYMPTOM of a wrong base transform, not a calibration bug."
+  PLAN_V0_2_7: "plan-spec.yaml rewritten 2026-08-29 by plan agent: v0.2.7 Corner Tracking (B1 stability -> B2 range -> B3 diagnostics -> B4 jaw filter), BASE_COMMIT f837c53, APPROVED 2026-08-29, user chose 'Both, stability first'. Intentionally left UNCOMMITTED as working draft."

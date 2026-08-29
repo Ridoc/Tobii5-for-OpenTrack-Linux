@@ -2,7 +2,7 @@
 # DEBT_POLICY (librarian): tech-debt.yaml holds OPEN items ONLY.
 # Move an item HERE ONLY when it is confirmed by testing — manual/user
 # confirmation preferred. Low-confidence (internal QA-only) stays OPEN.
-UPDATED: "2026-08-23"
+UPDATED: "2026-08-29"
 STATUS: "VERIFIED_RESOLVED_AND_ACCEPTED_WORKAROUNDS"
 
 SECTIONS:
@@ -40,6 +40,9 @@ SECTIONS:
     - id: "gaze-axis-direction"
       version: "v0.2.6"
       verified: "2026-08-23 user manual test: root cause = device raw gaze_y grows DOWNWARD (GUI-style); v0.2.6 centered formula inverted Y (dot above center + pitch inverted). Fix: single core.deviceToGui helper (X and Y identical, NO Y inversion) used by pipeline + GUI + fitAffine. Regression test raw_y {0.3,0.5,0.7}->{0.0,0.5,1.0}. User manual test CONFIRMED: glance up => dot UP + game pitch UP; 5-point wizard tracks gaze at all 5 points. Corner L/R wobbly/jumpy = ET5 hardware FOV limit (accepted tech-debt)."
+    - id: "cal-center-offset"
+      version: "v0.2.6"
+      verified: "2026-08-23 user manual test: 5-point wizard tracks gaze at all 5 points; after wizard -> correct screen center (plan-spec v0.2.7 CONTEXT: 'no calibration -> lower half is EXPECTED identity-preset bias y~0.245; after wizard -> correct center. Document, do NOT fix'). v0.2.1 preset affine y=(raw+0.394)/1.278 SUPERSEDED by working wizard fit (deviceToGui + unblocked fitAxis). No-calibration device center bias remains EXPECTED behavior (identity presets), accepted as documented."
 
   ACCEPTED_WORKAROUNDS:  # confirmed limitation + working workaround (no active fix)
     - id: "nfs-build-quirk"

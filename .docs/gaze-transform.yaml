@@ -1,6 +1,6 @@
 # gaze-transform.yaml — gaze/head coordinate transform domain (sign conventions + Y-axis saga)
-UPDATED: "2026-08-23"
-STATUS: "FIX_LANDED_BATCH_6-9; AWAITS_USER_CONFIRM"
+UPDATED: "2026-08-29"
+STATUS: "USER_CONFIRMED_2026-08-23; RESOLVED_v0.2.6"
 
 # ---------------------------------------------------------------------
 # 6. OpenTrack / X4 sign conventions (VERIFIED — do not re-litigate)
@@ -26,6 +26,6 @@ GAZE_Y_TRANSFORM_SAGA:
     SHARED_SOURCE_OF_TRUTH: "Used by ALL of: pipeline (tobii_filter.zig:811), GUI dot + per-eye (main.zig:494 & 515/523), and fitAffine (calibration.zig:326). This makes pipeline == GUI == fitAffine agree."
     CAL_WIZARD_UNBLOCK: "fitAxis (calibration.zig:303) rejected scale <= 0.1. A wrong-direction base transform produced a NEGATIVE y-scale, so fit SILENTLY returned null -> identity kept -> calibration NEVER stuck. With deviceToGui correct, the fit now yields a positive scale and the wizard can stick."
     REGRESSION_TEST: "raw_y {0.3,0.5,0.7} -> {0.0,0.5,1.0} at f=2.5."
-    LANDED_IN: "plan-spec.yaml BATCH_6-9."
-  OPEN_TRACKING: "Tech-debt id `gaze-axis-direction` is KEPT OPEN until the user's manual ET5 test confirms: glance up => dot UP + game pitch UP; wizard tracks gaze at all 5 points. Do NOT mark resolved early."
+    LANDED_IN: "plan-spec.yaml BATCH_6-9; committed f837c53 (2026-08-29) + docs 45ff9b6, pushed origin main."
+  RESOLVED: "User manual test CONFIRMED 2026-08-23: glance up => dot UP + game pitch UP; 5-point wizard tracks gaze at all 5 points. Tech-debt id `gaze-axis-direction` moved to .docs/resolved.yaml (RESOLVED_FIXES, v0.2.6). Corner L/R wobbly/jumpy = ET5 hardware FOV limit (accepted tech-debt, NOT a transform bug)."
   STALE_STATE_NOTE: "A stale calibration.json holding a NEGATIVE gaze_y_scale will silently flip Y. Delete ~/.config/tobiifree-opentrack/calibration.json and rerun the wizard after any geometry change."

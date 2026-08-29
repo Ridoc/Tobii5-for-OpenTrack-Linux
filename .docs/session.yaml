@@ -1,5 +1,5 @@
 # session.yaml — current session state (last-known)
-UPDATED: "2026-08-23"
+UPDATED: "2026-08-29"
 SESSION_ID: "tobii-x4-docs"
 WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-reviewer -> librarian; skills read_skeleton + test-scrubber.sh"
 
@@ -26,22 +26,20 @@ GOALS:
   - pending: "REQUIRES USER: confirm upper-edge behavior acceptable — remaining one-eye loss at screen edges is ET5 hardware FOV/track-box limit (device sends no data for lost eye), not fixable in bridge. Optional: test enlarging display_area to expand track box (needs affine recalibration)."
   - completed: "v0.2.6 gaze-Y axis fix (2026-08-23): root cause = device raw gaze_y grows DOWNWARD (GUI-style); prior centered formula INVERTED Y → dot above center + inverted pitch. Fix = single shared core.deviceToGui helper (X and Y identical, NO Y inversion) used by pipeline + GUI + fitAffine; unblocks wizard fit (fitAxis rejected negative y-scale before). Regression test raw_y {0.3,0.5,0.7}→{0.0,0.5,1.0}. See .docs/gaze-transform.yaml."
   - completed: "v0.2.6 USER MANUAL TEST CONFIRMED (2026-08-23): glance up ⇒ dot up + game pitch up; 5-point wizard tracks gaze at all 5 points. Corner L/R wobbly/jumpy = ET5 hardware FOV limit (accepted tech-debt). Tech-debt 'gaze-axis-direction' moved to .docs/resolved.yaml."
+  - completed: "v0.2.6 SHIPPED + PUSHED (2026-08-29): fix commit f837c53 'fix(v0.2.6): correct gaze-Y axis direction + unblock wizard centering' + docs commit 45ff9b6 'docs: capture gaze-Y lessons learned' — both on main, pushed to origin main. Branch fix/gaze-geometry fast-forwarded into main. AGENTS.md created at repo root this session (committed in 45ff9b6). v0.2.6 NOT tagged (fix release, no version bump)."
+  - pending-intentional: "plan-spec.yaml at repo root REWRITTEN by plan agent (2026-08-29) as NEW v0.2.7 plan — Corner Tracking: Stability + Range + Jaw Artifacts (BASE_COMMIT f837c53, APPROVED 2026-08-29, user chose 'Both, stability first'). INTENTIONALLY left UNCOMMITTED as working draft for the next session — do NOT stage/commit it."
   - removed: "Investigate: Squad/Proton UDP path (bridge on host localhost vs game in Wine namespace) — user confirmed OUT OF SCOPE"
 
 RUNTIME_STATE:
-  bridge: "PID 69014, applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack --port 4242 --verbose, ReleaseSafe (clean rebuild), rpath-resolved"
-  daemon: "PID 69002, applications/tobiifreed/zig-out/bin/tobiifreedot --force-display-area, /tmp/opencode/daemon-2dvalid2.log; socket /run/user/1000/tobiifreedot/gaze.sock; display_area origin=(-400,-10)"
-  logs: "/tmp/opencode/daemon-2dvalid2.log, /tmp/opencode/bridge-2dvalid2.log"
+  session_closed: "v0.2.6 session ended 2026-08-29 after push to origin main. daemon/bridge PIDs from the v0.2.4 session (bridge 69014 / daemon 69002) are STALE — do not reuse."
+  binaries: "ReleaseSafe builds parked: applications/tobiifreed/zig-out/bin/tobiifreedot + applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack (or .zig-local/ copies, see dev-env.yaml)"
   tobii_json: "~/.config/tobii.json display_area cy=-155 (working geometry)"
   qa_gate: "driver zig build test PASS via bash ~/.config/opencode/skills/test-scrubber.sh/test-scrubber.sh"
 
 NEXT_STEPS:
-  - "Confirm with user: remaining one-eye loss at screen edges is ET5 hardware FOV/track-box limit — bridge shows red dot at last position (correct). No code fix possible (device sends no data for lost eye)."
-  - "Optional experiment (user decision): enlarge display_area to expand track box — requires affine correction recalibration."
-  - "Commit v0.2.4 (viz fix + cal-progress-ui + investigation docs), tag, push."
-  - "PENDING USER MANUAL TEST (2026-08-23, at screen): confirm gaze-Y fix — glance up ⇒ dot up + game pitch up; then run 5-point wizard once ⇒ dot tracks gaze at all 5 points. DONE 2026-08-23 — user CONFIRMED."
-  - "AFTER user confirms: mark tech-debt id 'gaze-axis-direction' resolved, run BATCH_7/8/9 (calibration log hardening, docs sync, commit as v0.2.6 fix NO version bump), fast-forward main, push origin. DONE 2026-08-23."
-  - "Push to origin main; tech-debt 'gaze-axis-direction' moved to .docs/resolved.yaml; corner L/R wobbly/jumpy accepted as ET5 hardware FOV limit."
+  - "NEXT SESSION: execute plan-spec.yaml v0.2.7 (Corner Tracking: Stability + Range + Jaw Artifacts) — order B1 stability (n-flap fix: pipeline must honor per-eye 2D plausibility like calibration.feedSample) -> B2 range (n=1 yaw freeze + drift authority 0.36 + edge eye-ratio 0.15) -> B3 diagnostics (jaw artifact state logging) -> B4 jaw filter (data-derived threshold). User approved 'Both, stability first'. plan-spec.yaml is the uncommitted working draft."
+  - "v0.2.6 is SHIPPED + PUSHED (f837c53 + 45ff9b6 on origin main, NOT tagged)."
+  - "Remaining accepted limitation: one-eye loss at screen edges = ET5 hardware FOV/track-box limit; bridge holds last position (red dot)."
 
 NOTE:
   - detail: "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles, justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded."
@@ -49,3 +47,4 @@ NOTE:
   - detail: "Track-box investigation CONFIRMED: device's per-output 2D validity (0x1d/0x1e/0x1f) is 0 for a lost eye, 2D=(0,0) sentinel — genuinely no data. One-eye loss at edges = hardware FOV/track-box limit."
   - detail: "Bridge sends no UDP when no eyes tracked (early return before sendPacket)."
   - detail: "Eye origin no longer needed for plane fit (falsified)."
+  - detail: "v0.2.7 root causes (from plan-spec.yaml rewrite, code-verified): in-game inner-60% stall = n=1 yaw freeze + drift authority 0.36 (tobii_filter.zig:1003) + edge eye-ratio 0.15; corner wobble = pipeline gates rotation on 3D-origin validity only while calibration.feedSample accepts per-eye 2D plausibility — pipeline flaps n=1/n=2. FACTOR TRAP: pipeline uses PRESET track_box_factor (tobii_filter.zig:810), GUI uses daemon 112B factor (main.zig:493) — can diverge silently."

@@ -1,5 +1,5 @@
 # release.yaml — release/publish ledger
-UPDATED: "2026-08-22"
+UPDATED: "2026-08-29"
 REMOTE: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git"
 BRANCH: "main"
 
@@ -37,3 +37,4 @@ HISTORY_NOTES:
   - "v0.2.2 fixes applied: gaze-viz-affine-fix, cal-window-180, cal-points-inset, emulated-headtracking-note, old-presets-deleted."
   - "v0.2.4 fixes applied: eye-viz plausibility gate (reject −1.0 sentinel AND (0,0) zero-vector, accept finite; keep last position when eye lost), cal-progress-ui (green ring + counter below dot). Track-box investigation CONFIRMED one-eye loss at edges is ET5 hardware FOV/track-box limit (device sends no valid data for lost eye: 2D=(0,0), per-output validity=0)."
   - "Known: ET5 clip-mount hardware FOV/track-box limit causes intermittent single-eye loss at screen edges (device reports no valid data for the lost eye); bridge shows red dot at last position. Not fixable in software."
+  - "v0.2.6 (2026-08-29): gaze-Y axis fix — commits f837c53 'fix(v0.2.6): correct gaze-Y axis direction + unblock wizard centering' + 45ff9b6 'docs: capture gaze-Y lessons learned'. Pushed to origin main. NOT tagged (fix release, no version bump). User manual test CONFIRMED 2026-08-23 (glance up => dot up + pitch up; 5-point wizard tracks all points). Branch fix/gaze-geometry fast-forwarded into main."

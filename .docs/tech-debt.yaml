@@ -2,50 +2,10 @@
 # DEBT_POLICY: once an item is confirmed by testing (manual/user preferred),
 # move it to .docs/resolved.yaml. Keep items OPEN if only internal/QA-tested
 # with low confidence, until verified and really fixed.
-UPDATED: "2026-08-23"
+UPDATED: "2026-08-29"
 STATUS: "OPEN_ITEMS_ONLY"
 
 ITEMS:
-  - id: "gaze-axis-direction"
-    severity: "high"
-    status: "resolved-v0.2.6"
-    detail: |
-      BLOCKED: screen-center calibration (the ~10 failed 'calibrate to center' attempts).
-      ROOT CAUSE (2026-08-23, runtime-traced): v0.2.6 centered formula
-      phys_y=(0.5+0.5/f − raw_y)·f INVERTED the Y axis. Device raw gaze_y grows
-      DOWNWARD (GUI-style), matching the pre-v0.2.5 no-invert pipeline that worked.
-      v0.2.6 made gui_y ∝ −raw_y, producing BOTH: (1) gaze dot above center and
-      (2) pitch INVERTED (gaze_pitch=(0.5−gui)·scale became negative on look-up).
-      User confirmed: glance up => dot moves DOWN.
-      COMPOUNDING MACHINERY GAP: fitAxis (calibration.zig:303) rejects scale<=0.1.
-      When base pre-transform direction is wrong, the 5-point wizard computes a
-      NEGATIVE y-scale and the fit silently returns null -> identity kept ->
-      calibration to center NEVER STICKS. This is why ~10 prior fixes appeared to fail.
-      FIX (plan BATCH_6): single helper deviceToGui(raw:[2]f64,f:f64) in
-      driver/src/tobiifree_core.zig: out=(raw−(0.5−0.5/f))·f, X and Y identical, NO
-      Y inversion; called from all 4 sites (tobii_filter.zig:811, main.zig:494 &
-      515/523, calibration.zig:326) so pipeline == GUI == fitAffine share one source
-      of truth. Regression test: raw_y {0.3,0.5,0.7}->{0.0,0.5,1.0} at f=2.5.
-      PRE-MERGED attempts that contributed: v0.2.1 affine y=(raw+0.394)/1.278 (measured
-      under too-small EDID config), v0.2.5 bottom-anchored assumption, BATCH_3 1-raw*f
-      (dot off top), v0.2.6 centered+inverted (current state). Stale neg-scale
-      calibration.json deleted.
-      ACCEPTANCE (user-confirmed, at screen, 2026-08-23): glance up => dot moves UP
-      + game pitch UP; run 5-point wizard once => dot tracks gaze at all 5 points.
-      REMOVED from tech-debt: user manual test CONFIRMED fix works.
-  - id: "cal-center-offset"
-    severity: "high"
-    status: "open"            # fix implemented but re-verify PENDING user at screen — LOW CONFIDENCE until manual confirm
-    detail: |
-      Phase 1.3 controlled capture (2026-08-22, 11 dumps): center gaze y=0.24-0.31
-      (expected 0.5); bottom-edge y=0.80; BR y=0.79; BL x=0.50 (expected 0.05).
-      Y offset ~-0.20-0.25 + vertical compression; X fold-over at BL.
-      ROOT CAUSE (Phase 2A analysis): device gaze estimation biased — grows with gaze
-      elevation (center 86mm low, bottom ~45mm low, top 31% unreadable).
-      PROPOSED FIX: bridge-side affine y=(raw+0.394)/1.278 (Preset gaze_y_offset=0.394,
-      gaze_y_scale=1.278; zeroes center 0.245->0.5 and bottom).
-      KEEP OPEN: center/bottom re-verify captures PENDING user at screen. Move to
-      .docs/resolved.yaml ONLY after user confirms at screen.
   - id: "predictable-config-path"
     severity: "low"
     status: "open"
