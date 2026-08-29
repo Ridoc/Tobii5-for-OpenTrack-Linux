@@ -1,0 +1,31 @@
+# gaze-transform.yaml — gaze/head coordinate transform domain (sign conventions + Y-axis saga)
+UPDATED: "2026-08-23"
+STATUS: "FIX_LANDED_BATCH_6-9; AWAITS_USER_CONFIRM"
+
+# ---------------------------------------------------------------------
+# 6. OpenTrack / X4 sign conventions (VERIFIED — do not re-litigate)
+# ---------------------------------------------------------------------
+SIGN_CONVENTIONS:
+  FLIP_YAW: "flip_yaw=true on ALL presets (interocular yaw is positive on head-LEFT, opposite of X4)."
+  GAZE_TUG: "Gaze tug must NEVER be flipped (gaze screen coords right/up=+ already match X4; flipping inverts the tug)."
+  PITCH: "head up = positive pitch; raw eye-Y +Y is down-ish, handled by ref-relative atan(dy/neck). flip_pitch defaults FALSE and applies to the head signal only."
+
+# ----------------------------------------------------------------------------
+# 5. The gaze-Y transform saga (important domain history)
+# ----------------------------------------------------------------------------
+GAZE_Y_TRANSFORM_SAGA:
+  GOAL: "calibrated screen-center gaze + pipeline must EQUAL GUI math (dot must match where the game looks)."
+  FAILED_ATTEMPTS:
+    v0_1_1: "EDID-based — patched a symptom, added a regression."
+    v0_2_1: "affine y=(raw+0.394)/1.278 — measured under too-small EDID config, so the fit was wrong."
+    v0_2_5: "track-box x2.5 — bottom-anchored assumption; dot off top."
+    v0_2_6: "centered formula phys_y=(0.5+0.5/f - raw_y)*f — INVERTED Y (dot above center + pitch INVERTED)."
+  ROOT_CAUSE_IDENTIFIED_2026_08_23: "The device raw gaze_y grows DOWNWARD (GUI-style: y=0 top / y=1 bottom). This MATCHES the pre-v0.2.5 pipeline which had NO Y inversion and worked acceptably. The v0.2.6 'centered' formula inverted Y, causing BOTH (1) the dot-above-center and (2) inverted pitch (gaze_pitch=(0.5-gui)*scale became negative on look-up). User confirmed: glance up => dot moves DOWN."
+  THE_FIX:
+    HELPER: "core.deviceToGui(raw:[2]f64, f:f64) = (raw - (0.5 - 0.5/f)) * f, applied to X and Y IDENTICALLY (NO Y inversion)."
+    SHARED_SOURCE_OF_TRUTH: "Used by ALL of: pipeline (tobii_filter.zig:811), GUI dot + per-eye (main.zig:494 & 515/523), and fitAffine (calibration.zig:326). This makes pipeline == GUI == fitAffine agree."
+    CAL_WIZARD_UNBLOCK: "fitAxis (calibration.zig:303) rejected scale <= 0.1. A wrong-direction base transform produced a NEGATIVE y-scale, so fit SILENTLY returned null -> identity kept -> calibration NEVER stuck. With deviceToGui correct, the fit now yields a positive scale and the wizard can stick."
+    REGRESSION_TEST: "raw_y {0.3,0.5,0.7} -> {0.0,0.5,1.0} at f=2.5."
+    LANDED_IN: "plan-spec.yaml BATCH_6-9."
+  OPEN_TRACKING: "Tech-debt id `gaze-axis-direction` is KEPT OPEN until the user's manual ET5 test confirms: glance up => dot UP + game pitch UP; wizard tracks gaze at all 5 points. Do NOT mark resolved early."
+  STALE_STATE_NOTE: "A stale calibration.json holding a NEGATIVE gaze_y_scale will silently flip Y. Delete ~/.config/tobiifree-opentrack/calibration.json and rerun the wizard after any geometry change."

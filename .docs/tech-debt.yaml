@@ -1,32 +1,55 @@
-# tech-debt.yaml — known issues / open follow-ups
+# tech-debt.yaml — OPEN debt ONLY (unresolved / unverified / low-confidence)
+# DEBT_POLICY: once an item is confirmed by testing (manual/user preferred),
+# move it to .docs/resolved.yaml. Keep items OPEN if only internal/QA-tested
+# with low confidence, until verified and really fixed.
 UPDATED: "2026-08-23"
-STATUS: "OPEN_ITEMS_LOGGED"
+STATUS: "OPEN_ITEMS_ONLY"
 
 ITEMS:
-  - id: "cal-apply-verify"
-    severity: "medium"
-    status: "resolved-v0.2.2"
-    detail: "Blob round-trip verified 2026-08-22: wizard completed 5-point pass, cal_apply received 1480 B blob, tobii.json updated (md5 398df2c79ae9a68019999cfd8f635910). Display area config persisted correctly."
+  - id: "gaze-axis-direction"
+    severity: "high"
+    status: "resolved-v0.2.6"
+    detail: |
+      BLOCKED: screen-center calibration (the ~10 failed 'calibrate to center' attempts).
+      ROOT CAUSE (2026-08-23, runtime-traced): v0.2.6 centered formula
+      phys_y=(0.5+0.5/f − raw_y)·f INVERTED the Y axis. Device raw gaze_y grows
+      DOWNWARD (GUI-style), matching the pre-v0.2.5 no-invert pipeline that worked.
+      v0.2.6 made gui_y ∝ −raw_y, producing BOTH: (1) gaze dot above center and
+      (2) pitch INVERTED (gaze_pitch=(0.5−gui)·scale became negative on look-up).
+      User confirmed: glance up => dot moves DOWN.
+      COMPOUNDING MACHINERY GAP: fitAxis (calibration.zig:303) rejects scale<=0.1.
+      When base pre-transform direction is wrong, the 5-point wizard computes a
+      NEGATIVE y-scale and the fit silently returns null -> identity kept ->
+      calibration to center NEVER STICKS. This is why ~10 prior fixes appeared to fail.
+      FIX (plan BATCH_6): single helper deviceToGui(raw:[2]f64,f:f64) in
+      driver/src/tobiifree_core.zig: out=(raw−(0.5−0.5/f))·f, X and Y identical, NO
+      Y inversion; called from all 4 sites (tobii_filter.zig:811, main.zig:494 &
+      515/523, calibration.zig:326) so pipeline == GUI == fitAffine share one source
+      of truth. Regression test: raw_y {0.3,0.5,0.7}->{0.0,0.5,1.0} at f=2.5.
+      PRE-MERGED attempts that contributed: v0.2.1 affine y=(raw+0.394)/1.278 (measured
+      under too-small EDID config), v0.2.5 bottom-anchored assumption, BATCH_3 1-raw*f
+      (dot off top), v0.2.6 centered+inverted (current state). Stale neg-scale
+      calibration.json deleted.
+      ACCEPTANCE (user-confirmed, at screen, 2026-08-23): glance up => dot moves UP
+      + game pitch UP; run 5-point wizard once => dot tracks gaze at all 5 points.
+      REMOVED from tech-debt: user manual test CONFIRMED fix works.
+  - id: "cal-center-offset"
+    severity: "high"
+    status: "open"            # fix implemented but re-verify PENDING user at screen — LOW CONFIDENCE until manual confirm
+    detail: |
+      Phase 1.3 controlled capture (2026-08-22, 11 dumps): center gaze y=0.24-0.31
+      (expected 0.5); bottom-edge y=0.80; BR y=0.79; BL x=0.50 (expected 0.05).
+      Y offset ~-0.20-0.25 + vertical compression; X fold-over at BL.
+      ROOT CAUSE (Phase 2A analysis): device gaze estimation biased — grows with gaze
+      elevation (center 86mm low, bottom ~45mm low, top 31% unreadable).
+      PROPOSED FIX: bridge-side affine y=(raw+0.394)/1.278 (Preset gaze_y_offset=0.394,
+      gaze_y_scale=1.278; zeroes center 0.245->0.5 and bottom).
+      KEEP OPEN: center/bottom re-verify captures PENDING user at screen. Move to
+      .docs/resolved.yaml ONLY after user confirms at screen.
   - id: "predictable-config-path"
     severity: "low"
     status: "open"
     detail: "saveToFile writes to predictable ~/.config/tobii.json (same-user symlink attack only; no privilege boundary crossed). Consider O_NOFOLLOW or dir-fd based writes in a hardening pass."
-  - id: "cal-center-offset"
-    severity: "high"
-    status: "resolved-v0.2.1"
-    detail: "Phase 1.3 controlled capture (2026-08-22, 11 dumps): center gaze y=0.24-0.31 (expected 0.5); bottom-edge y=0.80 (expected 0.95); BR y=0.79; BL x=0.50 (expected 0.05, eye origin left). Y offset ~-0.20-0.25 + vertical compression; X fold-over at BL. Single-eye garbage frames confirmed at screen corners (validity collapse to ~40-50% at TL/TR/top-edge). ROOT CAUSE (Phase 2A analysis): display-plane geometry mismatch hypothesis FALSIFIED -- no eye position + plane (z0, tilt) explains the device readings (concurrency fit residual 44-85mm; only y-consistent solutions put eye at z~90mm; free-tilt solutions absurd, tilt 32-39deg / eye z 330-350mm, fail BR-x by 366-587mm). The device gaze estimation itself is biased: grows with gaze elevation (center 86mm low, bottom ~45mm low, top 31% unreadable). FIX: bridge-side affine correction y=(raw+0.394)/1.278 (Preset gaze_y_offset=0.394, gaze_y_scale=1.278; zeroes center 0.245->0.5 and bottom; no x correction). Plane retained at clip-mount default (z=65, tilt=12). VERIFIED: center/bottom re-verify captures PENDING user at screen."
-  - id: "cal-invalid-frame-hold"
-    severity: "medium"
-    status: "resolved-v0.2.1"
-    detail: "B1: raw gaze validation (bounds [-0.05,1.05], reject exact (0,0) and (-1,-1) sentinel) feeds HOLD via last_good_gaze instead of garbage. Confirmed invalid frame pattern: -1.0000,-1.0000, validity=4, origins 0.0."
-  - id: "cal-pitch-pin"
-    severity: "high"
-    status: "resolved-v0.2.1"
-    detail: "B3: pitch-pin safety net -- pitch_pin_deg=19.0, pitch_pin_s=2.0, pitch_pin_rate=0.05; triggers when |pitch|>=19deg >2s + !corner_hold + corrected gaze centered (<=rest_gaze_deg) -> bounded ref_mid[1] nudge + has_last_good=false. Prevents the 90deg pitch pin caused by center 0.245 -> gaze_pitch +7.5-11.5deg exceeding rest-follow +-4deg. B2 achieved automatically via corrected gaze feeding rest-follow yaw/pitch."
-  - id: "cal-pitch-curves"
-    severity: "medium"
-    status: "resolved-v0.2.1"
-    detail: "B4: PITCH_UP_PTS/PITCH_DOWN_PTS flattened {0,0},{2,0},{10,25},{20,50} (was {20,90}) -- removes instant 90deg pitch at 20deg gaze elevation."
   - id: "live-display-area"
     severity: "low"
     status: "open"
@@ -39,47 +62,3 @@ ITEMS:
     severity: "low"
     status: "open"
     detail: "ARCHITECTURE.md lists open refactor items: TS Tracker -> Source interface, WsSource TS, SocketSource full daemon protocol (currently gaze-only)."
-  - id: "wizard-qa-gate"
-    severity: "high"
-    status: "resolved-v0.2.2"
-    detail: "Wizard QA gate passed 2026-08-22: 5-point calibration completed with fixes (SAMPLES_PER_POINT 60->180, top corners inset 5%->15%). Blob round-trip verified. User confirmed GUI elements correct."
-  - id: "nfs-build-quirk"
-    severity: "medium"
-    status: "accepted-workaround"
-    detail: |
-      Zig cache atomic rename fails on NFS (/mnt/NAS-Zeno) when installing artifacts to project-local zig-out/.
-      WORKAROUND (verified 2026-08-23): Build with `--cache-dir /tmp/zig-local-cache-<app>` (local filesystem), then manually copy executable from cache to `.zig-local/<app>/bin/`.
-      - build: `cd applications/<app> && zig build -Doptimize=ReleaseSafe --cache-dir /tmp/zig-local-cache-<app>`
-      - copy daemon: `cp /tmp/zig-local-cache-tobiifreed/o/<hash>/tobiifreedot .zig-local/tobiifreed/bin/`
-      - copy bridge: `cp /tmp/zig-local-cache-bridge/o/<hash>/tobiifree-opentrack .zig-local/tobiifree-opentrack/bin/`
-      - run from: `.zig-local/<app>/bin/` (gitignored)
-      - .zig-local/ is gitignored; plain file copies onto NAS work fine
-      - avoids all NFS atomic rename issues; write BUILD_INFO.txt (git rev + build date) per zig-out/ to distinguish stale vs fresh binary
-  - id: "hibernation-usb"
-    severity: "medium"
-    status: "accepted-workaround"
-    detail: "Post-hibernation USB endpoint stale; daemon restart alone insufficient; USB unplug/replug required, then restart daemon+bridge. Documented in x4-foundations-opentrack.md."
-  - id: "gaze-viz-affine-fix"
-    severity: "medium"
-    status: "resolved-v0.2.2"
-    detail: "Eye visualization was showing raw gaze coordinates (center y≈0.245) instead of affine-corrected values (center y≈0.5). Fixed: onGaze now applies y=(raw+gaze_y_offset)/gaze_y_scale matching UDP output. Visualization now matches corrected tracking."
-  - id: "cal-point-inset"
-    severity: "medium"
-    status: "resolved-v0.2.4"
-    detail: "Top calibration corners at 5% from edges (0.05,0.05) caused 0/180 valid frames even with 3s capture window. Root cause: capture gate used eye-origin validity (0x07/0x0d) which flips to 4 at extreme angles. FIX (v0.2.4): bridge-side plausibility gate — accept per-eye sample if validity==0 OR per-eye 2D coords plausible (not −1.0 sentinel, not (0,0) zero-vector, finite). No protocol/driver change needed. Corner capture now robust; inset points (0.15,0.15) kept as safety margin for device gaze-y bias (top 31% unreadable)."
-  - id: "emulated-headtracking-note"
-    severity: "low"
-    status: "resolved-v0.2.2"
-    detail: "Added GUI subtitle + README scope section clarifying headtracking is emulated via OpenTrack protocol (eye→head conversion), not native Tobii game integration (Windows-only API)."
-  - id: "viz-eye-validity-false-positive"
-    severity: "medium"
-    status: "resolved-v0.2.4"
-    detail: "Eye visualization bugs at upper screen edge (2026-08-23, INVESTIGATION COMPLETE). Two distinct causes: (1) 'only 1 eye shown' — device per-eye 2D y legitimately exceeds 1.0 at upper edge (raw up to ~2.0, corrected ~1.9); old gate [−0.5,1.5] rejected real tracking. FIX: accept any finite non-sentinel coords. (2) 'eye jumps to left edge' — when an eye is lost (validity=4) device sends 2D=(0,0) which affine-correction mapped to (0,0.308)=left edge; old gate accepted (0,0). FIX: reject (0,0) and keep last known position (dot turns red, stays put). Track-box investigation (daemon 0x1d/0x1e/0x1f debug capture) CONFIRMS the one-eye loss at edges is a genuine ET5 FOV/track-box limitation: lost eye reports per-output 2D validity=0 (0x1e for R, 0x1d for L) AND 2D=(0,0) — NO valid data exists to recover. Display area verified correct (EDID 800x330mm matches config; device tracks both eyes at y=1.39 some frames)."
-  - id: "cal-progress-ui"
-    severity: "medium"
-    status: "resolved-v0.2.4"
-    detail: "Calibration wizard showed capture counter (e.g. '120/180') centered above the dot, disrupting focus. FIX (v0.2.4): removed centered text; added green progress ring around the dot (arc sweep = cap_n/SAMPLES_PER_POINT) + small counter below the dot at py+60 (subtle, 14px, semi-transparent green). Fixation zone now clear."
-  - id: "squad-proton-udp-path"
-    severity: "medium"
-    status: "removed"
-    detail: "Erroneously inserted; user confirmed out of scope. Squad runs via Proton (Wine namespace) — bridge UDP to host 127.0.0.1:4242 vs game in isolated network namespace. Not a TobiiArgus issue; remove from ledger."

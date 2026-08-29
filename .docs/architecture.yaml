@@ -19,7 +19,13 @@ MODULE_GRAPH (bridge build.zig):
   - "tobii_filter (pipeline) imports tobiifree_core"
   - "display_area_config (EDID + json config)"
   - "calibration (wizard state machine) imports daemon_protocol"
+  - "calibration ALSO imports tobiifree_core (added BATCH_6-9)"
   - "executable links libusb-1.0 + gtk4 + libc"
+
+IMPORT_RULE (bridge):
+  - "Shared driver modules imported by RELATIVE path ../../driver/src/*.zig."
+  - "If a new app module imports a driver module, you MUST add it to that module's `.imports` in applications/tobiifree-opentrack/build.zig. E.g. calibration needed `.{ .name = \"tobiifree_core\", .module = tobiifree_core }`; tobii_filter.zig and main.zig already imported tobiifree_core."
+  - "driver edits therefore hit ALL app modules (relative imports); rebuild + re-bundle wasm after any driver/src edit."
 
 CONSUMERS:
   - tobiifree-opentrack: "primary OpenTrack bridge"

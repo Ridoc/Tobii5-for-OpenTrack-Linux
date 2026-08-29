@@ -1,5 +1,6 @@
 const std = @import("std");
 const proto = @import("daemon_protocol");
+const core = @import("tobiifree_core");
 
 const log = std.log.scoped(.calibration);
 
@@ -307,10 +308,13 @@ fn fitAxis(points: []const [2]f64) ?struct { scale: f64, offset: f64 } {
 /// Fit the affine correction that maps averaged device gaze coords (captured
 /// at the 5 wizard points) to physical screen coords.
 ///
-/// The pipeline/bridge compute, per axis:
+/// Fit the affine correction that maps averaged device gaze coords (captured
+/// at the 5 wizard points) to physical screen coords.
+///
+/// The pipeline/bridge compute, per axis (single shared helper core.deviceToGui):
 ///   pre = transform(raw_device)          (== GUI coord when device is perfect)
 ///     X: pre_x = (raw_x − (0.5 − 0.5/f)) · f
-///     Y: pre_y = (0.5 + 0.5/f − raw_y) · f   (screen CENTERED in box; Y inverted)
+///     Y: pre_y = (raw_y − (0.5 − 0.5/f)) · f   (screen CENTERED in box; NOT inverted)
 ///   gui = (pre + offset) / scale         ← what we fit here
 ///
 /// So each calibration point contributes the pair {known_gui, pre}, and the
@@ -322,8 +326,9 @@ pub fn fitAffine(result_gaze: [NUM_CAL_POINTS][2]f64, factor: f64) ?AffineFit {
     var ys: [NUM_CAL_POINTS][2]f64 = undefined; // {gui_y, pre_y}
     for (CALIBRATION_POINTS, result_gaze, 0..) |cp, gz, i| {
         if (!std.math.isFinite(gz[0]) or !std.math.isFinite(gz[1])) return null;
-        xs[i] = .{ cp.x, (gz[0] - (0.5 - 0.5 / f)) * f };
-        ys[i] = .{ cp.y, (0.5 + 0.5 / f - gz[1]) * f };
+        const pre = core.deviceToGui(gz, f);
+        xs[i] = .{ cp.x, pre[0] };
+        ys[i] = .{ cp.y, pre[1] };
     }
     const fx = fitAxis(&xs) orelse return null;
     const fy = fitAxis(&ys) orelse return null;

@@ -801,15 +801,16 @@ ref_set: bool = false,
             !(g_raw[0] == -1.0 and g_raw[1] == -1.0);
         if (g_ok) self.last_good_gaze = g_raw;
         //    v0.2.6: convert expanded track box coords → physical screen
-        //    coords BEFORE the affine correction (identical math to the GUI
-        //    transform in main.zig onGaze). Device display area = physical ×
-        //    track_box_factor; the physical screen is CENTERED in the box:
-        //      device x ∈ [0.5−0.5/f, 0.5+0.5/f] → [0,1]
-        //      device y ∈ [0.5−0.5/f, 0.5+0.5/f] → GUI [1,0] (top→0, bottom→1)
-        //      (empirically confirmed: screen center reads raw_y≈0.50)
+        //    coords BEFORE the affine correction (single shared helper
+        //    core.deviceToGui — same math as GUI viz and calibration fit).
+        //    Device display area = physical × track_box_factor; the physical
+        //    screen is CENTERED in the box: device span [0.5−0.5/f, 0.5+0.5/f]
+        //    maps to [0,1] on BOTH axes. raw_y grows DOWNWARD (GUI-like), so
+        //    Y is NOT inverted (inverting it broke pitch in v0.2.6).
         const f_tb: f64 = @max(p.track_box_factor, 1.0);
-        const phys_x = (self.last_good_gaze[0] - (0.5 - 0.5 / f_tb)) * f_tb;
-        const phys_y = (0.5 + 0.5 / f_tb - self.last_good_gaze[1]) * f_tb;
+        const phys = core.deviceToGui(self.last_good_gaze, f_tb);
+        const phys_x = phys[0];
+        const phys_y = phys[1];
         //    Phase 2A: error-map-derived correction (see Preset fields),
         //    applied on PHYSICAL coords.
         const y_scale = @max(p.gaze_y_scale, 0.1);

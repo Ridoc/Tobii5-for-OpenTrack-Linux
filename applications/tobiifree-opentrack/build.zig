@@ -108,6 +108,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "daemon_protocol", .module = daemon_protocol },
+            .{ .name = "tobiifree_core", .module = tobiifree_core },
         },
     });
 

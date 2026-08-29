@@ -24,6 +24,8 @@ GOALS:
   - completed: "v0.2.4 EYE-VIZ INVESTIGATION (tracking box): device has internal 3D track box (trackbox_eye_pos_L/R in GazeSample). Track box correctly configured (EDID 800x330mm == config; device tracks both eyes at y=1.39 some frames). Definitive daemon debug capture of 0x1d/0x1e/0x1f per-output 2D validity: when eye lost (validity=4), 2D=(0,0) AND per-output validity=0 (0x1e for R, 0x1d for L) — NO valid data exists. One-eye loss at edges = genuine ET5 FOV/track-box hardware limitation, NOT a code bug. Original 'jumps to left edge' bug FIXED (reject (0,0) + keep-last-position)."
   - completed: "v0.2.4 cleanup: driver debug logging removed (tobiifree_core.zig clean); bridge/daemon rebuilt ReleaseSafe; driver zig build test PASS."
   - pending: "REQUIRES USER: confirm upper-edge behavior acceptable — remaining one-eye loss at screen edges is ET5 hardware FOV/track-box limit (device sends no data for lost eye), not fixable in bridge. Optional: test enlarging display_area to expand track box (needs affine recalibration)."
+  - completed: "v0.2.6 gaze-Y axis fix (2026-08-23): root cause = device raw gaze_y grows DOWNWARD (GUI-style); prior centered formula INVERTED Y → dot above center + inverted pitch. Fix = single shared core.deviceToGui helper (X and Y identical, NO Y inversion) used by pipeline + GUI + fitAffine; unblocks wizard fit (fitAxis rejected negative y-scale before). Regression test raw_y {0.3,0.5,0.7}→{0.0,0.5,1.0}. See .docs/gaze-transform.yaml."
+  - completed: "v0.2.6 USER MANUAL TEST CONFIRMED (2026-08-23): glance up ⇒ dot up + game pitch up; 5-point wizard tracks gaze at all 5 points. Corner L/R wobbly/jumpy = ET5 hardware FOV limit (accepted tech-debt). Tech-debt 'gaze-axis-direction' moved to .docs/resolved.yaml."
   - removed: "Investigate: Squad/Proton UDP path (bridge on host localhost vs game in Wine namespace) — user confirmed OUT OF SCOPE"
 
 RUNTIME_STATE:
@@ -34,13 +36,16 @@ RUNTIME_STATE:
   qa_gate: "driver zig build test PASS via bash ~/.config/opencode/skills/test-scrubber.sh/test-scrubber.sh"
 
 NEXT_STEPS:
-  1. "Confirm with user: remaining one-eye loss at screen edges is ET5 hardware FOV/track-box limit — bridge shows red dot at last position (correct). No code fix possible (device sends no data for lost eye)."
-  2. "Optional experiment (user decision): enlarge display_area to expand track box — requires affine correction recalibration."
-  3. "Commit v0.2.4 (viz fix + cal-progress-ui + investigation docs), tag, push."
+  - "Confirm with user: remaining one-eye loss at screen edges is ET5 hardware FOV/track-box limit — bridge shows red dot at last position (correct). No code fix possible (device sends no data for lost eye)."
+  - "Optional experiment (user decision): enlarge display_area to expand track box — requires affine correction recalibration."
+  - "Commit v0.2.4 (viz fix + cal-progress-ui + investigation docs), tag, push."
+  - "PENDING USER MANUAL TEST (2026-08-23, at screen): confirm gaze-Y fix — glance up ⇒ dot up + game pitch up; then run 5-point wizard once ⇒ dot tracks gaze at all 5 points. DONE 2026-08-23 — user CONFIRMED."
+  - "AFTER user confirms: mark tech-debt id 'gaze-axis-direction' resolved, run BATCH_7/8/9 (calibration log hardening, docs sync, commit as v0.2.6 fix NO version bump), fast-forward main, push origin. DONE 2026-08-23."
+  - "Push to origin main; tech-debt 'gaze-axis-direction' moved to .docs/resolved.yaml; corner L/R wobbly/jumpy accepted as ET5 hardware FOV limit."
 
 NOTE:
-  - "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles, justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded."
-  - "Plane-geometry hypothesis FALSIFIED: device gaze estimation itself biased (center 86mm low, bottom ~45mm low, top 31% unreadable)."
-  - "Track-box investigation CONFIRMED: device's per-output 2D validity (0x1d/0x1e/0x1f) is 0 for a lost eye, 2D=(0,0) sentinel — genuinely no data. One-eye loss at edges = hardware FOV/track-box limit."
-  - "Bridge sends no UDP when no eyes tracked (early return before sendPacket)."
-  - "Eye origin no longer needed for plane fit (falsified)."
+  - detail: "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles, justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded."
+  - detail: "Plane-geometry hypothesis FALSIFIED: device gaze estimation itself biased (center 86mm low, bottom ~45mm low, top 31% unreadable)."
+  - detail: "Track-box investigation CONFIRMED: device's per-output 2D validity (0x1d/0x1e/0x1f) is 0 for a lost eye, 2D=(0,0) sentinel — genuinely no data. One-eye loss at edges = hardware FOV/track-box limit."
+  - detail: "Bridge sends no UDP when no eyes tracked (early return before sendPacket)."
+  - detail: "Eye origin no longer needed for plane fit (falsified)."

@@ -485,17 +485,15 @@ fn onGaze(sample: *const core.GazeSample) void {
     g_lock.lock();
     g_last_out = out;
     // Transform device expanded coords -> physical normalized [0,1]
-    // Device uses expanded track box (physical * factor). Physical screen
-    // occupies x in [0.5 - 0.5/factor, 0.5 + 0.5/factor], y in [0, 1/factor].
-    // Device Y=0 is bottom, GUI Y=0 is top → INVERT Y.
+    // via the single shared helper (core.deviceToGui) — SAME math as the
+    // pipeline and calibration fit so viz == UDP. Device display area =
+    // physical * track_box_factor; screen is CENTERED in the box, device
+    // span [0.5-0.5/f, 0.5+0.5/f] maps to [0,1] on both axes. raw_y grows
+    // DOWNWARD (GUI-like), so Y is NOT inverted.
     const factor: f64 = if (g_physical_config) |pc| pc.track_box_factor else 2.5;
-    // Transform device expanded coords -> physical normalized [0,1]
-    // x: physical screen centered horizontally → [0.5-0.5/f, 0.5+0.5/f] → [0,1]
-    const phys_x = (sample.gaze_point_2d_norm[0] - (0.5 - 0.5 / factor)) * factor;
-    // y: physical screen is CENTERED in the expanded device track box.
-    // Device y ∈ [0.5−0.5/f, 0.5+0.5/f] → GUI [1, 0] (screen top→0, bottom→1).
-    // Empirically confirmed (BATCH_3 diag): screen center reads raw_y≈0.50.
-    const phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_norm[1]) * factor;
+    const phys = core.deviceToGui(sample.gaze_point_2d_norm, factor);
+    const phys_x = phys[0];
+    const phys_y = phys[1];
     // Apply affine gaze correction (same formula as pipeline) so the
     // visualization matches the UDP output. Now on physical normalized coords,
     // both axes (v0.2.6: X affine added, fitted by the calibration wizard).
@@ -512,19 +510,17 @@ fn onGaze(sample: *const core.GazeSample) void {
     const l_plausible = eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
     const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
     if (l_plausible) {
-        const l_phys_x = (sample.gaze_point_2d_L_norm[0] - (0.5 - 0.5 / factor)) * factor;
-        const l_phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_L_norm[1]) * factor;
+        const l_phys = core.deviceToGui(sample.gaze_point_2d_L_norm, factor);
         g_eye_l_norm = .{
-            (l_phys_x + x_off) / x_scl,
-            @min(@max((l_phys_y + y_off) / y_scl, -0.2), 1.2)
+            (l_phys[0] + x_off) / x_scl,
+            @min(@max((l_phys[1] + y_off) / y_scl, -0.2), 1.2)
         };
     }
     if (r_plausible) {
-        const r_phys_x = (sample.gaze_point_2d_R_norm[0] - (0.5 - 0.5 / factor)) * factor;
-        const r_phys_y = (0.5 + 0.5 / factor - sample.gaze_point_2d_R_norm[1]) * factor;
+        const r_phys = core.deviceToGui(sample.gaze_point_2d_R_norm, factor);
         g_eye_r_norm = .{
-            (r_phys_x + x_off) / x_scl,
-            @min(@max((r_phys_y + y_off) / y_scl, -0.2), 1.2)
+            (r_phys[0] + x_off) / x_scl,
+            @min(@max((r_phys[1] + y_off) / y_scl, -0.2), 1.2)
         };
     }
     g_eye_l_valid = sample.validity_L == 0 or l_plausible;

@@ -1,0 +1,78 @@
+# dev-env.yaml — development environment & tooling (hard-won; do not rediscover)
+UPDATED: "2026-08-23"
+STATUS: "VERIFIED_BY_SESSION_2026-08-23"
+
+# ---------------------------------------------------------------------
+# 1. NFS build quirk (CRITICAL) — workspace is on NAS
+#    /mnt/NAS-Zeno/OpenCode/TobiiForX4Linux
+# ---------------------------------------------------------------------
+NFS_BUILD_QUIRK:
+  SYMPTOM: "Zig's --install step does an atomic rename that ALWAYS fails on NFS with PermissionDenied."
+  KEY_INSIGHT: "The COMPILE still SUCCEEDS; artifacts land in the local --cache dir. Only the install-to-project (zig-out/) step fails."
+  ROOT_CAUSE: "NFS filesystems do not provide the atomic rename(2) semantics Zig uses to move built artifacts into the project tree."
+  WORKAROUND:
+    - "Build with `--cache-dir /tmp/zig-local-cache-<tag>` so the cache lives on local tmpfs, NOT on NAS."
+    - "Manually copy the executable from `/tmp/zig-local-cache-<tag>/o/<hash>/<binary>` to `.zig-local/<app>/bin/`."
+    - ".zig-local/ is gitignored; binaries RUN from there. Plain (non-atomic) file copies onto NAS work fine."
+    - "Write BUILD_INFO.txt (git rev + build date) per zig-out/ to tell a stale vs fresh binary."
+
+  CONCRETE_VERIFIED_EXAMPLES:
+    bridge:
+      build: "cd applications/tobiifree-opentrack && zig build -Doptimize=ReleaseSafe --cache-dir /tmp/zig-local-cache-bridge9"
+      copy: "copy o/3767eba.../tobiifree-opentrack from the cache to .zig-local/tobiifree-opentrack/bin/"
+    daemon:
+      build: "cd applications/tobiifreed && zig build -Doptimize=ReleaseSafe --cache-dir /tmp/zig-local-cache-daemon"
+      copy: "copy o/b96ed875.../tobiifreedot from the cache to .zig-local/tobiifreed/bin/"
+    driver_tests:
+      build: "cd driver && zig build test --cache-dir /tmp/zig-local-cache-driver"
+      run: "run the produced o/<hash>/test binary DIRECTLY. There may be TWO test binaries in the cache — run the NEWEST (verify the test count matches your newly added tests)."
+    driver_wasm:
+      build: "cd driver && zig build -Doptimize=ReleaseSmall --cache-dir /tmp/zig-local-cache-wasm"
+      copy: "copy tobiifree_core.wasm from the cache to driver/zig-out/bin/ (bundle-wasm.mjs reads it from there)."
+
+# ---------------------------------------------------------------------
+# 2. Running zig / node / just under nix (flake env)
+# ---------------------------------------------------------------------
+NIX_ENV:
+  LOAD: "`nix develop` loads the flake env."
+  ZIG_PATH: "/nix/store/9ljn49hx3a2lhha1anl3agivwb3z0ga1-zig-0.15.2/bin/zig"
+  ZIG_PATH_NOTE: "zig is NOT on the default PATH — you must go through `nix develop` OR use the absolute store path."
+  ENVRC: ".envrc just contains `use flake`."
+  NIX_DEVELOP_LIMITATION: "`nix develop --command <single-token>` CANNOT reliably contain spaces/quotes. It treated \"zig build test --cache-dir /tmp/...\" as ONE filename and failed with 'Datei oder Verzeichnis nicht gefunden' (file or directory not found)."
+  MULTI_TOKEN_OPTIONS:
+    - "Set bash workdir to the target dir and pass `nix develop --command` the command WITHOUT quotes and WITHOUT spaces that need grouping."
+    - "OR invoke zig by ABSOLUTE store path inside plain bash (works, no nix needed)."
+    - "OR run `cd <dir> && nix develop --command zig build ...` (the cd is picked up by the outer shell; nix finds flake.nix by searching upward from cwd)."
+  JUST_CHECK_BROKEN: "`just check` fails on `typecheck-sdk` because sdk/node_modules is NOT installed (tsc is absent). This is a PRE-EXISTING environment gap, NOT a code fault. Run `zig build test` DIRECTLY to validate Zig changes instead of relying on `just check`."
+
+# ---------------------------------------------------------------------
+# 3. Zig std.testing API gotchas
+# ---------------------------------------------------------------------
+ZIG_STD_TESTING_GOTCHAS:
+  API_SURFACE: "std.testing has ONLY `expect(ok: bool) !void` and the `expectEqual*` family."
+  NO_FLOAT_TOLERANCE: "There is NO expectClose and no float-with-tolerance helper. For float asserts write: `try std.testing.expect(@abs(a - b) < 1e-9);`"
+  EXPORT_ARRAY_PARAM_BAN: "`pub export fn` (exported symbol, x86_64_sysv ABI) CANNOT take array parameters like `[2]f64` — compiler rejects with 'arrays are not allowed as a parameter type'. If a function is used ONLY internally (not needed by wasm/SDK), OMIT `export` (use plain `pub fn`) so it uses the normal calling convention and CAN accept arrays."
+
+# ---------------------------------------------------------------------
+# 4. Architecture / module wiring (bridge build graph)
+# ---------------------------------------------------------------------
+MODULE_WIRING:
+  BRIDGE_BUILD_GRAPH: "applications/tobiifree-opentrack/build.zig"
+  SHARED_DRIVER_IMPORT: "App modules import shared driver modules by RELATIVE path `../../driver/src/*.zig`."
+  IMPORT_REQUIREMENT: "If you import a driver module from a NEW app module, you MUST add it to that module's `.imports` list in build.zig. Example: calibration.zig needed `.{ .name = \"tobiifree_core\", .module = tobiifree_core }` added to its imports; tobii_filter.zig and main.zig already imported tobiifree_core."
+  JUSTFILE_RECIPES:
+    check: "typecheck-sdk + test-zig (test-zig is the meaningful gate)"
+    opentrack: "run the OpenTrack bridge (run tobiifreedot first — daemon owns USB)"
+    tobiifreedot: "run the daemon"
+    bundle: "wasm rebuild -> base64 embed sdk/src/wasm-bundle.ts [GENERATED; REQUIRED after any driver/src edit]"
+
+# ---------------------------------------------------------------------
+# 7. Common runtime facts
+# ---------------------------------------------------------------------
+RUNTIME_FACTS:
+  ET5_MOUNT: "ET5 clip-mounted below the bottom bezel."
+  DISPLAY_AREA: "origin default (-1000,-10), z=65mm, tilt=12deg; physical 800x330mm (3440x1440 ultrawide)."
+  TRACK_BOX: "track_box_factor 2.5 -> device area 2000x825mm."
+  USB_SINGLE_OWNER: "ONE process may claim the ET5 USB at a time: `killall tobiifreedot` before restarting the daemon."
+  HIBERNATION: "Post-hibernation the USB endpoint goes stale; a daemon restart alone is INSUFFICIENT — unplug/replug the USB cable, then restart daemon + bridge."
+  STALE_CALIBRATION_JSON: "A stale per-user ~/.config/tobiifree-opentrack/calibration.json can hold a NEGATIVE gaze_y_scale that silently flips Y. If the user changed display geometry, DELETE it and rerun the wizard."

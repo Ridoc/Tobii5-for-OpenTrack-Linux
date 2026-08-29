@@ -1,0 +1,52 @@
+# resolved.yaml — confirmed resolutions ledger (debt CLOSED)
+# DEBT_POLICY (librarian): tech-debt.yaml holds OPEN items ONLY.
+# Move an item HERE ONLY when it is confirmed by testing — manual/user
+# confirmation preferred. Low-confidence (internal QA-only) stays OPEN.
+UPDATED: "2026-08-23"
+STATUS: "VERIFIED_RESOLVED_AND_ACCEPTED_WORKAROUNDS"
+
+SECTIONS:
+  RESOLVED_FIXES:  # root cause fixed + verified (manual/user preferred)
+    - id: "cal-apply-verify"
+      version: "v0.2.2"
+      verified: "2026-08-22 manual round-trip: wizard 5-point pass, cal_apply received 1480B blob, tobii.json updated (md5 398df2c79ae9a68019999cfd8f635910); display area persisted."
+    - id: "cal-invalid-frame-hold"
+      version: "v0.2.1"
+      verified: "B1 raw gaze validation [-0.05,1.05] rejects (0,0)/(-1,-1) sentinels -> HOLD via last_good_gaze. Confirmed invalid-frame pattern -1.0000,-1.0000 validity=4."
+    - id: "cal-pitch-pin"
+      version: "v0.2.1"
+      verified: "B3 pitch_pin_deg=19.0/s=2.0/rate=0.05 bounds the 90deg pitch pin; corrected gaze feeds rest-follow yaw/pitch (B2 achieved automatically)."
+    - id: "cal-pitch-curves"
+      version: "v0.2.1"
+      verified: "B4 PITCH_UP/DOWN flattened {0,0},{2,0},{10,25},{20,50} (was {20,90}); removes instant 90deg pitch at 20deg elevation."
+    - id: "wizard-qa-gate"
+      version: "v0.2.2"
+      verified: "2026-08-22: 5-point calibration passed (SAMPLES_PER_POINT 60->180, top corners inset 5%->15%); user confirmed GUI elements correct."
+    - id: "gaze-viz-affine-fix"
+      version: "v0.2.2"
+      verified: "Eye viz now applies y=(raw+gaze_y_offset)/gaze_y_scale matching UDP output; dot center y≈0.5 not 0.245."
+    - id: "cal-point-inset"
+      version: "v0.2.4"
+      verified: "Plausibility gate (accept validity==0 OR plausible per-eye 2D, reject sentinel/zero-vector) makes top-corner capture robust at 0/180 valid frames."
+    - id: "emulated-headtracking-note"
+      version: "v0.2.2"
+      verified: "GUI subtitle + README scope clarify headtracking is emulated via OpenTrack (eye->head), not native Tobii game integration."
+    - id: "viz-eye-validity-false-positive"
+      version: "v0.2.4"
+      verified: "Investigation complete: accept finite non-sentinel coords; reject (0,0) keep-last-position. One-eye loss at edges CONFIRMED genuine ET5 FOV/track-box limit (daemon 0x1d/0x1e/0x1f)."
+    - id: "cal-progress-ui"
+      version: "v0.2.4"
+      verified: "Removed centered counter; green progress ring around dot + subtle counter below. Fixation zone clear."
+    - id: "gaze-axis-direction"
+      version: "v0.2.6"
+      verified: "2026-08-23 user manual test: root cause = device raw gaze_y grows DOWNWARD (GUI-style); v0.2.6 centered formula inverted Y (dot above center + pitch inverted). Fix: single core.deviceToGui helper (X and Y identical, NO Y inversion) used by pipeline + GUI + fitAffine. Regression test raw_y {0.3,0.5,0.7}->{0.0,0.5,1.0}. User manual test CONFIRMED: glance up => dot UP + game pitch UP; 5-point wizard tracks gaze at all 5 points. Corner L/R wobbly/jumpy = ET5 hardware FOV limit (accepted tech-debt)."
+
+  ACCEPTED_WORKAROUNDS:  # confirmed limitation + working workaround (no active fix)
+    - id: "nfs-build-quirk"
+      verified: "2026-08-23 concrete examples: atomic rename fails on NFS but compile succeeds (local --cache-dir); manual binary copy to .zig-local/<app>/bin/ + BUILD_INFO.txt. See .docs/dev-env.yaml."
+    - id: "hibernation-usb"
+      verified: "Post-hibernation USB endpoint stale; daemon restart alone insufficient; USB unplug/replug + restart daemon+bridge. See docs/x4-foundations-opentrack.md."
+
+  REMOVED:  # closed as out-of-scope / wontfix (not debt)
+    - id: "squad-proton-udp-path"
+      verified: "User confirmed out of scope. Squad via Proton (Wine ns) — bridge UDP 127.0.0.1:4242 vs game in isolated ns. Not a TobiiArgus issue."

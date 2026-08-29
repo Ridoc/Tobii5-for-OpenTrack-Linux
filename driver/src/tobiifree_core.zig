@@ -459,6 +459,35 @@ pub export fn decode_display_area(src: [*]const u8, len: usize, out: [*]u8) u32 
 }
 
 // =====================================================================
+// Gaze coordinate transform (single source of truth)
+// =====================================================================
+
+// Convert raw device gaze coords (normalized to the expanded track box)
+// into physical-screen coords, where (0,0)=top-left and (1,1)=bottom-right.
+//
+// The device display area = physical screen x track_box_factor; the physical
+// screen is CENTERED in that box, so device coords span [0.5-0.5/f, 0.5+0.5/f]
+// on BOTH axes. The same linear map applies to X and Y:
+//
+//   phys = (raw - (0.5 - 0.5/f)) * f
+//
+// At raw=0.5 (screen center) -> 0.5. At the physical top/left edge
+// (raw = 0.5-0.5/f) -> 0. At the bottom/right edge -> 1.
+//
+// NOTE: the device raw gaze_y grows DOWNWARD (GUI-style, y=0 top / y=1 bottom),
+// so Y is NOT inverted here. A prior attempt (v0.2.6) inverted Y and caused the
+// dot to render above center AND pitch to invert. The X and Y code paths are
+// deliberately identical to prevent that class of drift from ever returning.
+pub fn deviceToGui(raw: [2]f64, factor: f64) [2]f64 {
+    const f = if (factor >= 1.0) factor else 1.0;
+    const off = 0.5 - 0.5 / f;
+    return .{
+        (raw[0] - off) * f,
+        (raw[1] - off) * f,
+    };
+}
+
+// =====================================================================
 // Calibration / realm frame builders
 // =====================================================================
 
@@ -2495,4 +2524,31 @@ test "parse fragmented multi-envelope response" {
     try std.testing.expectEqual(@as(u8, 0), test_events[0].first); // full_payload[0] = 0
     try std.testing.expectEqual(@as(usize, 0), test_error_count);
     try std.testing.expectEqual(@as(usize, 0), acc_len);
+}
+
+test "deviceToGui maps expanded box to physical screen (f=2.5)" {
+    // Regression for the v0.2.6 axis-direction bug: device raw_y grows
+    // DOWNWARD (GUI-style), so X and Y map IDENTICALLY. The screen is
+    // centered in the expanded track box: device span [0.3,0.7] -> [0,1].
+    const f: f64 = 2.5;
+    const eps: f64 = 1e-9;
+
+    // Center of screen -> 0.5 on both axes.
+    const c = deviceToGui(.{ 0.5, 0.5 }, f);
+    try std.testing.expect(@abs(c[0] - 0.5) < eps and @abs(c[1] - 0.5) < eps);
+
+    // Top edge of physical screen: device y = 0.5 - 0.5/f = 0.3 -> GUI y = 0 (top).
+    const top = deviceToGui(.{ 0.3, 0.3 }, f);
+    try std.testing.expect(@abs(top[0] - 0.0) < eps and @abs(top[1] - 0.0) < eps);
+
+    // Bottom edge: device y = 0.5 + 0.5/f = 0.7 -> GUI y = 1 (bottom).
+    const bottom = deviceToGui(.{ 0.7, 0.7 }, f);
+    try std.testing.expect(@abs(bottom[0] - 1.0) < eps and @abs(bottom[1] - 1.0) < eps);
+
+    // The whole point: Y must NOT be inverted. A glance UP (smaller raw_y)
+    // must yield a SMALLER gui_y (toward top). If Y were inverted this
+    // assertion fails, catching the exact regression that broke pitch.
+    const look_up = deviceToGui(.{ 0.5, 0.35 }, f);
+    const look_down = deviceToGui(.{ 0.5, 0.65 }, f);
+    try std.testing.expect(look_up[1] < look_down[1]);
 }

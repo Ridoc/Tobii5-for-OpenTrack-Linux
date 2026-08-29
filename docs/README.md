@@ -31,7 +31,8 @@ Not human-facing prose; a YAML tree consumed by the agent workflow
 | `.docs/bridge-pipeline.yaml` | Filter pipeline, presets, defaults, UX constraints |
 | `.docs/calibration-wizard.yaml` | v0.2.0 wizard state machine, gates, fixes, status |
 | `.docs/release.yaml` | Tag/release ledger + pending v0.2.0 pipeline |
-| `.docs/tech-debt.yaml` | Known issues / accepted workarounds |
+| `.docs/tech-debt.yaml` | **OPEN debt only** (unresolved / unverified / low-confidence) |
+| `.docs/resolved.yaml` | Closed-debt ledger: confirmed resolutions + accepted workarounds (moved from tech-debt when verified) |
 | `.docs/session.yaml` | Current session state |
 
 ## Quick pointers

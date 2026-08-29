@@ -1,6 +1,6 @@
 # L0_ROUTER — TobiiForX4Linux memory bank
 # O(1) direct lookup: route by domain → leaf spec.
-VERSION: "1.0"
+VERSION: "1.1"
 PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux (TobiiArgus)"
 UPDATED: "2026-08-23"
 
@@ -27,7 +27,10 @@ CONCEPT_ROUTES:
   BRANDING: ".docs/branding.yaml"
   RELEASE: ".docs/release.yaml"
   TECH_DEBT: ".docs/tech-debt.yaml"
+  RESOLVED: ".docs/resolved.yaml"
   SESSION: ".docs/session.yaml"
+  DEV_ENV: ".docs/dev-env.yaml"
+  GAZE_TRANSFORM: ".docs/gaze-transform.yaml"
 
 DOMAIN_NOTES:
   X4_NATIVE: "X4: Foundations native Linux build, OpenTrack listener 127.0.0.1:4242 since 7.50 public beta; opencode/x4 multiplier 1.0/1.0."
@@ -35,3 +38,4 @@ DOMAIN_NOTES:
   BUILD_QUIRK: "NFS atomic rename fails on /mnt/NAS-Zeno -> zig build --cache-dir /tmp/zig-local-cache-* + manual binary copy; zig 0.15.2 at /nix/store/9ljn49hx3a2lhha1anl3agivwb3z0ga1-zig-0.15.2/bin/zig."
   RUNTIME_GTK: "GTK4 4.20.3 LD_LIBRARY_PATH (cairo/glib/pango/harfbuzz/fontconfig/graphene/gdk-pixbuf) required for bridge GUI."
   RUNTIME_LIBUSB: "libusb 1.0.29 (/nix/store/rqflzdkgggyp4cvp7hlwwjdyph62shik-libusb-1.0.29/lib) required for daemon."
+  DEBT_POLICY: "tech-debt.yaml = OPEN ONLY; confirmed resolutions (manual/user preferred) move to resolved.yaml. Low-confidence internal/QA-only stays OPEN."
