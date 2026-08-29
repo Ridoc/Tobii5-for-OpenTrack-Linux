@@ -33,6 +33,7 @@ Not human-facing prose; a YAML tree consumed by the agent workflow
 | `.docs/release.yaml` | Tag/release ledger + pending v0.2.0 pipeline |
 | `.docs/tech-debt.yaml` | **OPEN debt only** (unresolved / unverified / low-confidence) |
 | `.docs/resolved.yaml` | Closed-debt ledger: confirmed resolutions + accepted workarounds (moved from tech-debt when verified) |
+| `.docs/gaze-transform.yaml` | Gaze Y-axis saga v0.1.1→v0.2.6: root cause, transform rules, lessons learned |
 | `.docs/session.yaml` | Current session state |
 
 ## Quick pointers
