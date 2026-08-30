@@ -2,7 +2,7 @@
 # DEBT_POLICY (librarian): tech-debt.yaml holds OPEN items ONLY.
 # Move an item HERE ONLY when it is confirmed by testing — manual/user
 # confirmation preferred. Low-confidence (internal QA-only) stays OPEN.
-UPDATED: "2026-08-29"
+UPDATED: "2026-08-30"
 STATUS: "VERIFIED_RESOLVED_AND_ACCEPTED_WORKAROUNDS"
 
 SECTIONS:
@@ -43,6 +43,9 @@ SECTIONS:
     - id: "cal-center-offset"
       version: "v0.2.6"
       verified: "2026-08-23 user manual test: 5-point wizard tracks gaze at all 5 points; after wizard -> correct screen center (plan-spec v0.2.7 CONTEXT: 'no calibration -> lower half is EXPECTED identity-preset bias y~0.245; after wizard -> correct center. Document, do NOT fix'). v0.2.1 preset affine y=(raw+0.394)/1.278 SUPERSEDED by working wizard fit (deviceToGui + unblocked fitAxis). No-calibration device center bias remains EXPECTED behavior (identity presets), accepted as documented."
+    - id: "corner-n-flap-stability"
+      version: "v0.2.7"
+      verified: "2026-08-29 USER at screen (BATCH_1 gate PASSED): corners now HOLD STEADY — n=1 wobble gone (trace p95 0.1deg yaw step, long n=1 holds stable). Fixes: pipeline validity gate accepts per-eye 2D plausibility (shared core.eye2dPlausible) so n=2/rot_both holds through origin-validity flickers; 6-frame n-flap debounce; n1 y-settle 1.0s; per-eye Y low-pass (α 0.3); freeze tug output + eye ratio at last n=2 corner value during n=1."
 
   ACCEPTED_WORKAROUNDS:  # confirmed limitation + working workaround (no active fix)
     - id: "nfs-build-quirk"

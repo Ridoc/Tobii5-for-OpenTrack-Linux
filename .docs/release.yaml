@@ -1,5 +1,5 @@
 # release.yaml — release/publish ledger
-UPDATED: "2026-08-29"
+UPDATED: "2026-08-30"
 REMOTE: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git"
 BRANCH: "main"
 
@@ -10,10 +10,12 @@ TAGS:
   v0.2.2: "tagged (commit 53342db, TobiiArgus branding); E2E test session 2026-08-22"
   v0.2.3: "tagged (commit 75ce1a4, E2E test fixes); E2E test session 2026-08-22"
   v0.2.4: "tagged (commit 2a1ca2c, eye-viz validity fix + cal-progress-ui + track-box investigation docs); 2026-08-23"
+  v0.2.7: "RELEASED 2026-08-30 (commit e3da30f 'feat(v0.2.7): corner stability + range rework — v4.6 release'). Tag v0.2.7 pushed + gh release published. Release build = v4.6 (BUILD_INFO 5e7a301+v4.6-corner-reach-release-fix, QA bridge 23/23 + driver 23/23)."
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
   v0.2.0: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.2.0"
+  v0.2.7: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.2.7"
 
 SHIPPED_IN_V0.2.0:
   - "calibration wizard (applications/tobiifree-opentrack/src/calibration.zig) + GUI integration (main.zig)"
@@ -38,3 +40,4 @@ HISTORY_NOTES:
   - "v0.2.4 fixes applied: eye-viz plausibility gate (reject −1.0 sentinel AND (0,0) zero-vector, accept finite; keep last position when eye lost), cal-progress-ui (green ring + counter below dot). Track-box investigation CONFIRMED one-eye loss at edges is ET5 hardware FOV/track-box limit (device sends no valid data for lost eye: 2D=(0,0), per-output validity=0)."
   - "Known: ET5 clip-mount hardware FOV/track-box limit causes intermittent single-eye loss at screen edges (device reports no valid data for the lost eye); bridge shows red dot at last position. Not fixable in software."
   - "v0.2.6 (2026-08-29): gaze-Y axis fix — commits f837c53 'fix(v0.2.6): correct gaze-Y axis direction + unblock wizard centering' + 45ff9b6 'docs: capture gaze-Y lessons learned'. Pushed to origin main. NOT tagged (fix release, no version bump). User manual test CONFIRMED 2026-08-23 (glance up => dot up + pitch up; 5-point wizard tracks all points). Branch fix/gaze-geometry fast-forwarded into main."
+  - "v0.2.7 (2026-08-30): corner stability + range rework (v4.6 release). BATCH_1 corner one-eye stability (user-gated PASSED); BATCH_2 rework v4.1-v4.6: gaze-anchored drift + gaze-dwell engage, output-space drift cap (n1_drift_max_out_deg=95 via invertCurve()), release-ease from held value (cornerReleaseStart + corner_held_yaw, no @449 pop), n=2 corner reach (UL gap), tug_smoothing 0.88. FIRST bridge test target (23 tests). Known issues at release: GUI eye jitter (eyes micro-move at rest — needs smoothing, tech-debt gui-eye-jitter) + fast-turn overshoot (One-Euro fc_max lag, tech-debt fast-turn-overshoot). v4.6 USER GATE NOT fully re-run before release (user released instead) — BATCH_2 corner items stay OPEN in tech-debt until the v4.6 gate passes."
