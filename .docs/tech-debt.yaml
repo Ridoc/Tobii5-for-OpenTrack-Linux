@@ -2,7 +2,7 @@
 # DEBT_POLICY: once an item is confirmed by testing (manual/user preferred),
 # move it to .docs/resolved.yaml. Keep items OPEN if only internal/QA-tested
 # with low confidence, until verified and really fixed.
-UPDATED: "2026-08-29"
+UPDATED: "2026-08-30"
 STATUS: "OPEN_ITEMS_ONLY"
 
 ITEMS:
@@ -22,3 +22,11 @@ ITEMS:
     severity: "low"
     status: "open"
     detail: "ARCHITECTURE.md lists open refactor items: TS Tracker -> Source interface, WsSource TS, SocketSource full daemon protocol (currently gaze-only)."
+  - id: "corner-range-inward-jump"
+    severity: "medium"
+    status: "open"
+    detail: "BATCH_2 v1 fixed the corner inward-jump (old drift formula was sign-inverted + mis-scaled; turn_est = -asin(dx/neck) + outward-only gate converges to ~94-98% of equivalent turn, zero static-hold sag). QA-tested only; USER gate pending -> stays OPEN."
+  - id: "corner-overshoot-90deg"
+    severity: "high"
+    status: "open"
+    detail: "USER (2026-08-30, real rig): while HOLDING L/R corners the view still creeps to ~90 deg overshoot (exceeds normal head/eye range). ROOT CAUSE (19,934-line v2 trace): v2 raw-only drift bound (anchor + n1_extra_max_deg=15 raw) was tuned head_gain=1.0 + linear curve; real rig edge amplification ~8x (gain 2.0 x Tobii-spline slope ~4 deg/deg near 20-35 input): drift lg 8.5->13-15 raw -> output fy 124-145 deg (lg~9 raw -> ~95 = natural edge). v3 FIX IMPLEMENTED (code+QA GREEN 2026-08-30, bridge 12/12 + driver 23/23): cap drift TARGET in OUTPUT space — invertCurve() + n1_drift_max_out_deg=95.0; out_cap_raw=invertCurve(curve_mode,95,max_yaw,curve_exp,false)/head_gain (~9.33 raw on user rig); yaw_target capped to +-out_cap_raw BEFORE deeper-check (eases at n1_drift_rate — cap on TARGET not live lg, because live-clamp instantly snapped and broke BATCH_1e's lg=-25->160 hold). Residual ~5 deg above 95 in test = legitimate gaze TUG (eye_ratio floor) not drift. USER GATE STILL PENDING: v3 not yet built/deployed (running bridge is v2); user must confirm no 90-deg creep holding corners + upper corners engage + fluid."
