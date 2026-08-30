@@ -63,7 +63,7 @@ BATCHES:
 
   BATCH_2:
     TITLE: "Corner RANGE recovery — reach full edge turn in-game (inner 60% fix)"
-    STATUS: IN_PROGRESS # rework v3 output-space drift cap code+QA green 2026-08-30; DEPLOYED v3 GUI bridge (PID 13493) 2026-08-30; USER GATE PENDING (at screen)
+    STATUS: DEFERRED # released as v0.2.7 2026-08-30; USER GATE SKIPPED 2026-08-31 (user decision) -> corner-overshoot-90deg + corner-range-inward-jump stay OPEN tech-debt. Re-gate at a future session (bridge v4.6 deployed, daemon 13368 + bridge relaunch = ./applications/tobiifree-opentrack/.zig-local/tobiifree-opentrack/bin/tobiifree-opentrack)
     USER_FEEDBACK: "USER (2026-08-29, after first fix): (1) left/right + lower corners now reach the edge OK but then the view OVERSHOOTS — creeps to ~90° while HOLDING at the corner (exceeds the normal head/eye tracking range; NOT wanted). (2) upper left/right corners STILL not recognized — the range recovery never engages there. Process note: build marked BATCH_2 DONE prematurely without the user gate — corrected; gate is mandatory."
     REWORK: "fix 1 = drift STOP control: velocity gate (drift only runs while the single-eye translation estimate is genuinely MOVING — a held corner has a static/wobbling eye, no drift) + n=1 anchor bound (drift never extends past the n=2 occlusion turn + n1_extra_max 15 deg raw). fix 2 = RADIAL gaze gate (gaze_radial = sqrt(yaw^2+pitch^2) > 10 deg engage / < 6 disengage, plus |gaze_yaw|>2) for the drift + ratio floor + corner-hold witness — upper corners are diagonal looks with small horizontal gaze component."
     REWORK_QA: "v1 (2026-08-29): bridge 11/11 + driver 23/23 green; USER GATE FAILED 2026-08-30 (overshoot + upper corners intermittent — see TRACE_DIAGNOSIS). v2 (2026-08-30): drift target is GAZE-ANCHORED (n1_anchor_yaw + side*clamp(|gaze_yaw|*n1_gaze_gain,0,n1_extra_max_deg)) instead of chasing the LIVE single-eye translation; engage = GAZE-DWELL (radial>10 AND |gy|>2 sustained >= n1_gaze_dwell_s=0.12s) replacing the velocity gate; pitch = gaze-anchored (n1_pitch_anchor + clamp(gaze_pitch*0.5,±12) eased at 8 deg/s). v2 QA GREEN 2026-08-30: bridge 11/11 (BATCH_2d/e/f rewritten to v2 target math: 2d runaway eye 12->45 deg stops at gaze target anchor+clamp(20*0.7,0,15)=+14 raw NOT the runaway; 2e upper-left diagonal gaze -8deg engages to anchor+5.6; 2f flip=true +14 raw target, output 29>=0.85*full_turn=21.25 AND <= anchor+15.5) + driver 23/23. Deployed to running bridge 2026-08-30 (daemon 12067, bridge 12334 TOBII_TRACE=1, fresh trace /tmp/opencode/tobii-run/bridge-trace.log); USER GATE FAILED AGAIN 2026-08-30 (USER_TEST_2 verdict: LOWER corners overshoot ~90-deg creep + upper sometimes; see TRACE_DIAGNOSIS). v3 (2026-08-30): OUTPUT-SPACE DRIFT CAP — root cause of the persistent overshoot = v2 raw-space bound (anchor+n1_extra_max_deg=15 raw) was tuned head_gain=1.0+linear curve, but real rig edge amplification ~8x (gain 2.0 x Tobii-spline slope ~4 deg/deg at 20-35 input) -> drift lg 8.5->13-15 raw -> output fy 124-145 deg (lg~9 raw -> ~95 = correct natural edge). FIX: cap the drift TARGET in OUTPUT space via new invertCurve() helper + const n1_drift_max_out_deg=95.0; out_cap_raw=invertCurve(curve_mode,95,max_yaw,curve_exp,false)/head_gain (~9.33 raw on user rig); yaw_target capped to +-out_cap_raw BEFORE deeper-check (eases at n1_drift_rate — cap on TARGET not live lg; live-clamp attempt broke BATCH_1e's lg=-25->160 hold with instant snap). v3 QA GREEN 2026-08-30: bridge 12/12 (new BATCH_2g real-rig output-space cap test: n=2 pivot to 5-deg anchor, R eye runaway 5->25 deg over 270 frames, gaze pinned 0.7 (realistic corner look — 0.85 was unrealistically strong and inflated the gaze TUG), asserts max_fy<=105 (drift capped at 95 + ~5 residual = legit eye_ratio tug) AND >=80; BATCH_2g dev iterations: anchor 10 deg FAILED (already maps to ~100 output > cap) -> 5 deg) + driver 23/23. v3 NOT YET DEPLOYED (running GUI bridge PID 13208 = v2 binary); USER GATE PENDING (a) no 90-deg creep while holding corners (b) upper corners now engage (c) general movement fluid."
@@ -93,7 +93,8 @@ BATCHES:
       - {DONE: "USER GATE (v4.5, 2026-08-30, bridge 42132): FAILED (2/4) — creep 'mostly gone' but 'left upper rarely works' (UL reach: hands-only look hp -7.4..-9.8, rw -54, fy -57, never past ~60% of the ~95 edge) + 'small jitter everywhere'. 4,262-row trace analysis: @449 pop bug (46 deg/frame at ch=1: same-side pin guard hard-fails when the head-rotation estimate crosses center — yaw +6.76 -> -0.54, gy +15 still pinned — while the translation witness lags; fy 44.52 -> -1.67 in ONE frame); hold jitter p50 0.34 deg/frame (tug gate re-arm ramp ~0.42/frame + curve-amplified center micro-noise); gaze reach asymmetric (left max|gy| 25 vs right 31)."}
       - {DONE: "REWORK v4.6 (2026-08-30, corner reach + release): (1) ROTATION-CROSS RELEASE (@449): new corner_held_yaw field records the post-pin output value each hold frame; the pin else-branch releases like head_returned (latched, eased) when yaw*gaze_side <= 0 while the hold is active; cornerReleaseStart returns corner_held_yaw in the crossed case. No more single-frame pop when the estimate crosses center under a pinned gaze. (2) n=2 CORNER REACH (UL gap): mirror the n=1 gaze-anchored drift in the n=2 hold branch — corner_peak extends outward toward corner_peak + side*|gaze_yaw|*n1_gaze_gain*head_gain at n1_drift_rate*head_gain, capped at the natural edge (hold_edge_in -> the same OUTPUT-space cap that ended the 90-deg creep); the pin then holds the extended peak. (3) tug_smoothing 0.85 -> 0.88 (fc_min 1.2 -> 1.08 Hz) for the hold/small jitter. v4.6 QA GREEN: bridge 23/23 (new BATCH_2m rotation-cross release no-pop, BATCH_2n n=2 eyes-only UL reach to >=88 deg and <=100 cap; BATCH_2a/2f references re-measured with gaze-at-center so the n=2 reach can't inflate the equivalent-turn baseline) + driver 23/23."}
       - {DONE: "DEPLOY v4.6 (2026-08-30): ReleaseSafe rebuild (cache-dir /tmp/zig-local-cache-v46b, fresh), binary o/31c2a10c... md5 3f5fb7e2. CAUGHT deploy bug: first copy went to the REPO-ROOT .zig-local/ but the bridge actually execs applications/tobiifree-opentrack/.zig-local/ (process inode mismatch + old trace format n1t= proved the running 'v4.6' was still v4.5 md5 cb5cb6e0) — the earlier user test + overshoot observation were on v4.5. Fixed: v4.6 copied to the CORRECT applications-level .zig-local/tobiifree-opentrack/bin/ + BUILD_INFO.txt ('5e7a301+v4.6-corner-reach-release-fix'). Bridge PID 55808 live: connected daemon 13368, calibration loaded, new trace format (cp/chy fields, n1t removed), already holding ch=1 n=2 at rw=-95.00 fy=-95.00 cp=-19.03 (n=2 reach reached the natural edge)."}
-      - {TODO: "USER GATE (v4.6, at screen): (a) no 90-deg creep while HOLDING L/R corners (~95 deg hold), (b) UPPER corners — incl. LEFT-upper — engage AND reach the edge (the UL reach gap), (c) no single-frame pops on hold/release (the @449 cross), (d) OBSERVE lower-corner pitch no dive toward 90. NOTE: X4 must be running to consume UDP 4242."}
+      - {DONE: "USER GATE SKIPPED (2026-08-31, user decision): user chose to SKIP the v4.6 gate and proceed to BATCH_3. BATCH_2 stays IN_PROGRESS/OPEN in tech-debt (corner-overshoot-90deg + corner-range-inward-jump stay OPEN) until a future gate. Bridge v4.6 relaunched live this session (daemon 13368, bridge 59069, UDP 4242 verified 83 pkts/2.5s)."}
+      - {TODO: "USER GATE (v4.6, at screen, DEFERRED): (a) no 90-deg creep while HOLDING L/R corners (~95 deg hold), (b) UPPER corners — incl. LEFT-upper — engage AND reach the edge (the UL reach gap), (c) no single-frame pops on hold/release (the @449 cross), (d) OBSERVE lower-corner pitch no dive toward 90. NOTE: X4 must be running to consume UDP 4242."}
       - {DONE: "NEW USER OBSERVATION (v4.5 GUI, 2026-08-30): fast left/right head turns make the HEAD-viz dot SHOOT ~50% past the ring then correct back — transient peak in the final output yaw. ROOT-CAUSED in the v4.6 test trace (frames 3258-3266): One-Euro fc_max = 4 Hz at smoothing 0.90 cannot track a ~220 deg/s head reversal — smoothed yaw lags ~6-10 frames across center (frame 3258: hp=-4.1 but rw=+24.5, the dot points the WRONG way while the head crossed), and the Tobii curve amplifies the stale signal (yaw 5.08 -> rw 35.0 = 48% past the ring edge). NOT a corner bug. FIX EXPERIMENTED (v4.7: fc_d 1->3, fc_max_mult 30->150; sim: reversal lag 11.2->6.3 deg, rest jitter unchanged 0.0030->0.0031) BUT REVERTED at release — it broke BATCH_2i (release-ease step > 6.0 bound) and was not user-tested. DEFERRED to tech-debt."}
       - {DONE: "RELEASE DECISION (2026-08-30): user approved shipping the current state as v0.2.7 with the jitter + fast-turn overshoot as documented tech debt (GUI eyes visibly micro-moving at rest needs smoothing). v4.6 (23/23 bridge + 23/23 driver green) is the release build; v4.7 One-Euro experiment reverted from the tree. Tag v0.2.7 + push + gh release (BATCH_8 partially executed early). Remaining plan work: BATCH_2 user re-gate (corner hold/reach verification on v4.6), BATCH_3/4 (jitter + jaw filter, data-derived), BATCH_5-8."}
     GATE_NOTE: "behavior change user will feel at edges — manual test gate required before BATCH_3; (d) pitch-dive is an observation checkpoint, not a separate gate"
@@ -113,7 +114,7 @@ BATCHES:
 
   BATCH_3:
     TITLE: "Corner Diagnostics FIRST — data for BATCH_4 jaw filter thresholds"
-    STATUS: TODO
+    STATUS: DEFERRED # session closed 2026-08-31 (post-release); all open plan work = tech debt. See tech-debt.yaml deferred-batch entries for the full spec (structured TOBII_TRACE diag log + --diag-corners + per-point cal quality log + 10-min user session).
     INVARIANT: "structured key=value log lines, >= 10 Hz while |gaze_yaw| > 10 deg, machine-parseable"
     DELIVERABLE: "jaw artifact state (n=1 vs n=2) + jaw_diff distribution -> BATCH_4 design + threshold"
     SUBAGENTS:
@@ -127,7 +128,7 @@ BATCHES:
 
   BATCH_4:
     TITLE: "Jaw/Pitch Artifact Filter — threshold from BATCH_3 data, n=1-capable"
-    STATUS: TODO
+    STATUS: DEFERRED # blocked on BATCH_3 data (never collected). Also the target for the gui-eye-jitter tech-debt.
     INVARIANT: "synthetic jaw wobble (mm-scale Y oscillation at 2-5Hz) -> output pitch moves <= 2 deg"
     ACCEPTANCE: "user talks/chews at corner -> no pitch bounce in view"
     SUBAGENTS:
@@ -141,7 +142,7 @@ BATCHES:
 
   BATCH_5:
     TITLE: "Calibration Quality Gates — safe (no hard-fail on corners)"
-    STATUS: TODO
+    STATUS: DEFERRED
     INVARIANT: "calibration completes with 5 points even if a corner is weak; weak corners -> retry + warning, never abort"
     ACCEPTANCE: "wizard run at screen: all 5 points capture; BL/BR corners succeed with <= 3 retries"
     SUBAGENTS:
@@ -155,7 +156,7 @@ BATCHES:
 
   BATCH_6:
     TITLE: "Display-Area / Factor Consistency + Optional Expansion Experiment"
-    STATUS: TODO
+    STATUS: DEFERRED
     INVARIANT: "no silent factor divergence: preset factor vs daemon 112B factor mismatch is logged at startup"
     ACCEPTANCE: "bridge startup log shows factor source + no mismatch warning on default setup"
     SUBAGENTS:
@@ -169,7 +170,7 @@ BATCHES:
 
   BATCH_7:
     TITLE: "UX — extended track-area viz + uncalibrated badge (ux-reviewer folded)"
-    STATUS: TODO
+    STATUS: DEFERRED
     INVARIANT: "GUI communicates track extent; dot-outside-box is intentional, not confusing"
     ACCEPTANCE: "user reads the GUI: sees dimmed extended area beyond screen rect; sees 'run wizard' hint when uncalibrated"
     SUBAGENTS:
@@ -182,7 +183,7 @@ BATCHES:
 
   BATCH_8:
     TITLE: "Docs Sync + Tag v0.2.7"
-    STATUS: TODO
+    STATUS: DONE # CHANGELOG + release.yaml + tag v0.2.7 + gh release executed 2026-08-30. Remaining docs-sync items (tech-debt corner items, gaze-transform factor note) folded into the DEFERRED tech-debt ledger below.
     SUBAGENTS:
       librarian: {WHEN: "post-commit", SYNC: ".docs/release.yaml, .docs/session.yaml, .docs/tech-debt.yaml, .docs/gaze-transform.yaml"}
     STEPS:
@@ -204,6 +205,13 @@ TECH_DEBT:
   - "pipeline validity ignores per-eye 2D plausibility: addressed in v0.2.7 BATCH_1"
   - "GUI EYE JITTER (v0.2.7 release, user-visible 2026-08-30): eyes in the GUI viz constantly micro-move at rest — needs smoothing (tug-path + per-eye). BATCH_4-adjacent; data-derived threshold required, do NOT hardcode."
   - "FAST-TURN OVERSSHOOT (v0.2.7 release, trace-verified 2026-08-30): One-Euro fc_max 4Hz @ smoothing 0.90 can't track ~220 deg/s reversals -> smoothed yaw lags across center -> curve amplifies to ~50% past the GUI ring. Experiment v4.7 (fc_d 3, fc_max_mult 150) cut lag 11.2->6.3 deg with rest-jitter unchanged but broke BATCH_2i — needs a fixed test before re-applying."
+  - "BATCH_2 USER GATE (v4.6) DEFERRED (2026-08-31 user decision): full checklist in plan-spec BATCH_2 STEPS — (a) no 90-deg creep holding L/R (~95 hold), (b) upper corners incl UL reach the edge, (c) no single-frame pops (@449 cross), (d) lower-corner pitch no dive to 90. X4 must run to consume UDP 4242."
+  - "DEFERRED-BATCH BATCH_3 corner diagnostics (session closed before it ran): structured TOBII_TRACE upgrade (validity_L/R, plaus_L/R, n, corner_hold, jaw_diff=|L_y-R_y| plausibility-gated, n1_y_anchor_drift, n1_timer, pitch_rate at >=10Hz when |gaze_yaw|>10deg) + --diag-corners CLI flag (main.zig parseArgs ~:1785-1828, headless-capable) + per-point cal quality log (calibration.zig finalizePoint ~:147-171: valid_count/total, eye_loss_rate, avg_jaw_diff) + 10-min user session with deliberate jaw/talking at corners. This is the DATA BATCH_4 needs."
+  - "DEFERRED-BATCH BATCH_4 jaw/pitch artifact filter: BLOCKED on BATCH_3 data. Design: n=2 -> plausibility-gated |L_y-R_y| jaw gate w/ data-derived threshold; n=1 -> single-eye Y wobble-rate gate + pitch-velocity clamp; verify pitch_glitch_deg=5 deg/frame suffices (tobii_filter.zig:619). ALSO the home for the gui-eye-jitter fix. DO NOT hardcode 0.12."
+  - "DEFERRED-BATCH BATCH_5 calibration quality gates: corner eye_loss_rate > 30% at points 1-4 -> RETRY + warn NOT abort (calibration.zig:152-168); MIN_VALID_PER_POINT 15->30 (:36); MAX_POINT_RETRIES 3->4 (:37); remove redundant double gate; synthetic weak-corner test."
+  - "DEFERRED-BATCH BATCH_6 display-area/factor consistency: startup WARN when preset track_box_factor vs daemon 112B factor diverge (main.zig:1277-1283 vs g_stream_preset); optional factor 3.0-4.0 experiment (each = daemon restart + bridge flag + delete calibration.json + wizard re-run); docs/x4 note."
+  - "DEFERRED-BATCH BATCH_7 UX: dimmed extended-track-area rect in drawViz (main.zig:708-780) + 'uncalibrated — run wizard' badge; ux-reviewer acceptance folded."
+  - "DEFERRED-BATCH BATCH_8 leftovers: tech-debt.yaml corner items -> resolved IF BATCH_2/4 user gates pass later; gaze-transform.yaml FACTOR<->CALIBRATION coupling note (any factor change -> wizard re-run) — not yet written."
 
 NOTES:
   - "Order is deliberate: stability (B1) before range (B2) — user chose 'both, stability first'."
@@ -216,6 +224,6 @@ NOTES:
   - "User manual test gates: BATCH_1 (corner hold 5s), BATCH_2 (edge reach), BATCH_3 (--diag-corners session), BATCH_4 (talk/chew at corner), BATCH_5 (wizard 5-point)."
 
 HANDOVER:
-  STATUS: "v0.2.6 DONE & pushed; v0.2.7 plan REWRITTEN after critical review (2026-08-29)"
-  BINARY: "applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack + BUILD_INFO.txt"
-  NEXT: "Execute BATCH_1 (validity gate + debounce) -> user corner-hold test -> BATCH_2 (range) -> user edge test -> BATCH_3 (diagnostics) -> USER DIAG SESSION -> BATCH_4 (jaw filter) -> BATCH_5-8"
+  STATUS: "v0.2.7 RELEASED (2026-08-30, commit e3da30f, tag + gh release). Session closed 2026-08-31 — all remaining plan batches DEFERRED to tech-debt. NO further code changes expected until a future session."
+  BINARY: "applications/tobiifree-opentrack/.zig-local/tobiifree-opentrack/bin/tobiifree-opentrack (v4.6, md5 3f5fb7e2, BUILD_INFO 5e7a301+v4.6-corner-reach-release-fix) + BUILD_INFO.txt; daemon applications/tobiifreed/.zig-local/tobiifreed/bin/tobiifreedot (PID 13368)"
+  NEXT: "Future session (user-initiated): (1) re-open BATCH_2 v4.6 user gate at screen (deferred, checklist in BATCH_2 STEPS), (2) BATCH_3 diagnostics --diag-corners, (3) BATCH_4 jitter/jaw filter (data-derived), (4) BATCH_5-7. All spec'd in the tech-debt deferred-batches entries below."
