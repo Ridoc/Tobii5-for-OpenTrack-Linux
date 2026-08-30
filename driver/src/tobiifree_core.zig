@@ -487,6 +487,18 @@ pub fn deviceToGui(raw: [2]f64, factor: f64) [2]f64 {
     };
 }
 
+/// Returns true if per-eye 2D gaze coordinates are plausible (not the device's
+/// −1.0/−1.0 no-tracking sentinel, not the zero-vector (0,0) used when
+/// validity=4). At screen edges coords legitimately exceed [0,1] (looking
+/// above/below the screen), so we only reject sentinel/zero and accept any
+/// finite value. v0.2.7: SHARED helper — the pipeline validity gate, the
+/// calibration capture loop and the bridge GUI viz all use this one predicate
+/// so an eye that the tracker still sees (plausible per-eye 2D) is treated as
+/// tracked everywhere, even when the 3D origin validity flag flickers.
+pub fn eye2dPlausible(px: f64, py: f64) bool {
+    return !(px == -1.0 and py == -1.0) and !(px == 0.0 and py == 0.0) and std.math.isFinite(px) and std.math.isFinite(py);
+}
+
 // =====================================================================
 // Calibration / realm frame builders
 // =====================================================================

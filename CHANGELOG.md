@@ -4,6 +4,54 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [v0.2.7] — 2026-08-30 (corner stability + range rework)
+
+Corner-tracking stability and range recovery (plan v0.2.7: BATCH_1 done +
+gated, BATCH_2 rework v4.6 deployed). Released at the current working-tree
+state — the remaining jitter is recorded as tech debt below.
+
+### Added
+- **Bridge test target** (first unit tests for `tobii_filter.zig`):
+  `applications/tobiifree-opentrack/build.zig` + `bridge_tests.zig`, 23 tests
+  covering the validity gate, n-flap debounce, n=1 pitch stability, corner
+  drift (gaze-anchored), output-space cap, release-ease, rotation-cross
+  release, n=2 corner reach, and `invertCurve()` round-trips.
+- **`invertCurve()` helper** — back-maps an output-degree cap to the pre-curve
+  raw bound for ANY curve/cap (bisection over the Catmull-Rom table).
+
+### Fixed
+- **Gaze-Y axis direction** (v0.2.6 fix, folded into this release): shared
+  `deviceToGui` helper, no Y inversion — device raw gaze_y grows downward.
+- **Corner one-eye stability** (BATCH_1): pipeline validity gate accepts
+  per-eye 2D plausibility (`validity==0 OR eye2dPlausible`) so `n=2`/`rot_both`
+  holds while both eyes are visibly tracked; 6-frame n-flap debounce; n1
+  y-settle 1.0 s; per-eye Y low-pass (α 0.3) during n=1.
+- **Corner range rework** (BATCH_2 v4.1–v4.6):
+  - Drift target **gaze-anchored** (`anchor + side·clamp(|gaze_yaw|·gain, max)`)
+    + **gaze-dwell** engage (radial >10°, |gy|>2, ≥0.12 s) — kills the 90°
+    creep while holding AND the upper-corner miss (eyes-only looks).
+  - **Output-space drift cap** (`n1_drift_max_out_deg=95`) — the drift can
+    never push the final output past the natural corner edge.
+  - **Release-ease from the held value** (`cornerReleaseStart` + new
+    `corner_held_yaw`): no single-frame pop on head-return, gaze-unpin, or
+    rotation-cross release (the trace @449 46°/frame pop).
+  - **n=2 corner reach** — gaze-anchored edge extension in the n=2 hold branch
+    (fixes the "left-upper rarely reaches the edge" gap), capped at the
+    natural edge so it stops (no creep).
+
+### Known issues / tech debt (v0.2.7 release)
+- **GUI eye/head jitter** — eyes in the visualization constantly move slightly
+  at rest; smoothing deferred (BATCH_4-adjacent work, needs data-derived
+  thresholds).
+- **Fast-turn overshoot** — quick head reversals make the head-viz dot shoot
+  ~50% past the ring then settle back: the One-Euro `fc_max` (4 Hz at
+  smoothing 0.90) cannot track a ~220°/s reversal, so the smoothed yaw lags
+  the head across center. Tuning `fc_d`/`fc_max` deferred (experiment v4.7
+  reverted — it broke a release-ease test).
+- **Upper-left reach still head-dependent** — the n=2 reach closes most of the
+  gap, but a pure eyes-only left-up look with a shallow head turn can
+  under-reach the right side.
+
 ## [Unreleased] — v0.2.4 (eye-viz validity + cal progress UI)
 
 Fixes the eye visualization at the upper screen edge and improves the

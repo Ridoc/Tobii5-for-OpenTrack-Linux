@@ -438,14 +438,10 @@ fn sendPacket(v: [6]f64) void {
     };
 }
 
-/// Returns true if the per-eye 2D gaze coordinates are plausible (not the
-/// device's −1.0/−1.0 no-tracking sentinel, not the zero-vector (0,0) used
-/// when validity=4). The device emits −1.0/−1.0 for untracked eyes and (0,0)
-/// when validity=4. At screen edges coords legitimately exceed [0,1] (looking
-/// above/below screen), so we only reject sentinel/zero and accept any finite.
-fn eye2dPlausible(px: f64, py: f64) bool {
-    return !(px == -1.0 and py == -1.0) and !(px == 0.0 and py == 0.0) and std.math.isFinite(px) and std.math.isFinite(py);
-}
+/// Per-eye 2D plausibility lives in the shared helper core.eye2dPlausible
+/// (driver/src/tobiifree_core.zig) — same predicate as the pipeline validity
+/// gate and the calibration loop, so GUI viz and UDP output agree on what
+/// counts as "tracked" (v0.2.7).
 
 fn onGaze(sample: *const core.GazeSample) void {
     g_frame_count += 1;
@@ -507,8 +503,8 @@ fn onGaze(sample: *const core.GazeSample) void {
     // Only update per-eye viz coords when eye is plausible (not lost).
     // When eye is lost (validity=4), device sends raw=(0,0) which would
     // place the dot at left edge after correction. Keep last known position.
-    const l_plausible = eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
-    const r_plausible = eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
+    const l_plausible = core.eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
+    const r_plausible = core.eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
     if (l_plausible) {
         const l_phys = core.deviceToGui(sample.gaze_point_2d_L_norm, factor);
         g_eye_l_norm = .{

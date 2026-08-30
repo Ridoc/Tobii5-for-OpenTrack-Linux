@@ -1,137 +1,221 @@
-# plan-spec.yaml — v0.2.6 GUI Visualization & Gaze Pipeline Fix
-# Approved 2026-08-23. Goal: calibrated center = visualization center;
-# pipeline UDP gaze math === bridge GUI math.
+# plan-spec.yaml — v0.2.7 Corner Tracking: Stability + Range + Jaw Artifacts
+# Goal: stable corner gaze (no wobble), full edge reach in-game, jaw artifacts
+#       filtered with data-derived thresholds, display area verified.
+# BASE_COMMIT: f837c53 (v0.2.6 fix — user manual test CONFIRMED)
+# REWRITTEN 2026-08-29 after critical review of prior v0.2.7 draft + user feedback.
+#   DROPPED premises (code-verified wrong):
+#     - "Option B not implemented" -> user CONFIRMS eye tracks outside viz box
+#       (factor 2.5 IS active; GUI dot outside box is by-design, deviceToGui
+#       maps the EXPANDED track box onto the physical rect)
+#     - "corner coverage = hardware FOV limit" -> user reports both eyes often
+#       tracked at corners; the instability is PIPELINE state, not device FOV
+#   ROOT CAUSE "in-game inner 60%": n=1 yaw FREEZE + corner-drift authority
+#     only 0.36 (tobii_filter.zig:1003) + edge eye-ratio dropped to 0.15
+#     (:1179-1184) -> view stalls ~60-70% of a full edge turn. NOT track box.
+#   ROOT CAUSE "wobbly/jumpy at corners": n=1/n=2 oscillation. Pipeline gates
+#     rotation on 3D ORIGIN validity only (:672-673); calibration.feedSample
+#     already accepts per-eye 2D plausibility as validity (calibration.zig:115-119)
+#     while the pipeline does NOT -> both eyes visible in GUI (per-eye 2D dots,
+#     main.zig:510-527) but pipeline flaps to n=1 when origins flicker.
+#   JAW FILTER (was): |L_y - R_y| > 0.12 CANNOT work in n=1 — the lost eye
+#     reports (0,0) sentinel -> false trigger; and it never fires in the state
+#     where jaw artifacts appear. Diagnostics FIRST (BATCH_3), threshold
+#     data-derived (BATCH_4). User: "not sure which state -> log it first".
+#   ORDER: stability (B1) -> range (B2) -> diagnostics (B3) -> jaw filter (B4).
+#     User chose "Both, stability first".
+
 META:
-  VERSION: "v0.2.6"
-  BASE_COMMIT: "3d45732"
-  APPROVED: "2026-08-23"
+  VERSION: "v0.2.7"
+  BASE_COMMIT: "f837c53"
+  APPROVED: "2026-08-29"
 
 CONTEXT:
-  - "v0.2.5 expanded track_box EDID×2.5 (2000×825mm for 800×330 screen); screen x∈[0.3,0.7] y∈[0,0.4] device-normalized"
-  - "bridge onGaze HAS expanded→physical; pipeline process() MISSING → UDP +9° phantom pitch, yaw 2.5× compressed"
-  - "affine presets identity(0/1); nothing fits from calib data despite result_gaze[] holding 5 KNOWN points"
-  - "VERIFIED: bridge transform math, calib point flow (raw→add_calibration_point, device own space), defaultFromEdid geometry"
-  - "FIXED: daemon payload_len==72 on raw TTP but TLV-encoded 3×point3d≈164B → condition fails → raw TLV sent → bridge sees 164"
-  - "DONE BATCH_1-4 incl. v0.2.6 centered formula phys_y=(0.5+0.5/f−raw_y)·f (commit e2cd587, branch fix/gaze-geometry)"
-  - "RUNTIME TRACE (BATCH_5): screen CENTER reads raw_y≈0.47-0.51 → CENTERED geometry (not bottom-anchored) confirmed"
-  - "NEW ROOT CAUSE (2026-08-23): v0.2.6 centered formula INVERTED the Y axis. Device raw_y grows DOWNWARD (GUI-style), matching pre-v0.2.5 no-invert pipeline that worked. My centered formula made gui_y ∝ −raw_y ⇒ dot above-center AND pitch inverted (gaze_pitch=(0.5−gui)·s). User confirmed: glance up ⇒ dot moves DOWN."
-  - "WHY 10 PRIOR FIXES FAILED: fitAxis guard (calibration.zig:303) REJECTS scale≤0.1 → when the base pre-transform direction is wrong the 5-point wizard computes a NEGATIVE y-scale → fit silently returns null → identity kept → calibration to center NEVER sticks. This is the machinery gap, not just a sign."
+  - "v0.2.6 gaze-Y axis fix CONFIRMED (device raw gaze_y grows DOWNWARD; deviceToGui shared helper, no Y inversion)"
+  - "track_box_factor=2.5 ACTIVE and user-verified: eye tracks OUTSIDE the GUI viz box (expansion works). GUI dot beyond box = feature, not bug."
+  - "USER: no calibration -> view in lower half (EXPECTED: builtin presets are affine identity 0/1, device center bias y~0.245); after wizard -> correct center. Document, do NOT fix."
+  - "USER: in-game view only reaches inner 60% at screen edges. Root: n=1 yaw freeze + drift authority 0.36 + edge eye-ratio 0.15."
+  - "USER: both eyes often tracked at corners but fallback unstable / wobbly / jumpy. Root: pipeline ignores per-eye-2D plausibility -> n=1/n=2 flapping."
+  - "USER: jaw movement up/down at corners visible in logs. State (n=1 vs n=2) UNKNOWN -> BATCH_3 logging first."
+  - "USER: upper corner tracking not optimal (wobbly/jumpy) — same n-flap root cause, covered by BATCH_1."
+  - "FACTOR TRAP: pipeline uses PRESET track_box_factor (tobii_filter.zig:810), GUI uses DAEMON 112B factor (main.zig:493) — they can diverge silently."
+  - "FACTOR <-> CALIBRATION COUPLING: deviceToGui(f) feeds fitAffine (calibration.zig:323-340). ANY factor change invalidates existing calibration.json (stale-file class documented in gaze-transform.yaml). Factor change REQUIRES daemon restart + wizard re-run + delete calibration.json."
+  - "CAL POINTS: TL/TR inset 15% (0.15,0.15)/(0.85,0.15) but BL/BR at TRUE edges (0.05,0.95)/(0.95,0.95) — device weak zone (bottom bias y~0.80, top ~31% dead). Hard-fail gates on corners are user-visible regressions."
+  - "TEST INFRA: driver tests cover only tobiifree_core.zig protocol/parsing; bridge tobii_filter.zig has NO test target. BATCH_1/2/4 tests need a NEW bridge test target."
 
 BATCHES:
   BATCH_1:
-    TITLE: "Pipeline Transform"
-    STATUS: DONE
-    FILES: [driver/src/tobii_filter.zig]
-    INVARIANT: "pipeline math === bridge onGaze math (transform THEN affine)"
+    TITLE: "Corner One-Eye STABILITY — keep n=2 while both eyes visible, debounce n-flap"
+    STATUS: DONE # code+QA green 2026-08-29; USER gate PASSED 2026-08-29
+    DONE_NOTE: "bridge 5/5 (BATCH_1a/b/c/d/e) + driver 23/23 green. USER (2026-08-29): corners now HOLD STEADY — n=1 wobble gone (trace: p95 0.1deg yaw step, long n=1 holds stable). Real-device root cause found in live trace: combined gaze COLLAPSES to center when one eye drops -> ratio jumped to 0.80 and the tug chased it. FIX: freeze tug output + eye ratio at last n=2 corner value during n=1 (gaze stays live for drift gate). Remaining '5-10% jump to inside at corners' + 'upper corners worst' = BATCH_2 corner RANGE scope. alpha DEVIATION: 0.06 not 0.3; anchor = settle-window MEAN (kills settle-end DC step)."
+    INVARIANT: "synthetic alternating n=2/n=1 at 5Hz -> output yaw step <= 1 deg/frame; no n-flap visible in UDP"
+    ACCEPTANCE: "user holds 5s at each screen corner -> no wobble/jump; view holds position"
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test && cd applications/tobiifree-opentrack && zig build test"}
     STEPS:
-      - {DONE: "add track_box_factor:f64=2.5 to Preset (after gaze_y_scale)"}
-      - {DONE: "seed .track_box_factor=2.5 in all 3 BUILTIN_PRESETS"}
-      - {DONE: "process() ~L793: transform BEFORE affine → phys_x,y via f_tb → g_corr=[(phys_x+x_off)/x_s, (phys_y+y_off)/y_s]"}
-      - {DONE: "keep g_ok validation on raw coords [−0.05,1.05]"}
+      - {TODO: "lift eye2dPlausible into a shared helper (driver/src/tobiifree_core.zig; ref calibration.zig:103-105, main.zig:446) — used by pipeline + GUI + calib"}
+      - {TODO: "pipeline validity gate tobii_filter.zig:672-673: left_valid = validity_L==0 OR eye2dPlausible(gaze_point_2d_L_norm); same for R — keeps rot_both (n=2) while per-eye 2D plausible even if 3D origin validity flickers"}
+      - {TODO: "n=1<->n=2 transition DEBOUNCE: hold current n-state for 6 consecutive frames before switching (new fields in TobiiPipeline state ~:580-637)"}
+      - {TODO: "n1_y_settle_s 0.5 -> 1.0s (tobii_filter.zig:621)"}
+      - {TODO: "per-eye Y low-pass during n=1: center[1] alpha=0.3 (n1_y_eff path ~:966-969)"}
+      - {TODO: "KEEP n1_y_sanity_mm = 25 (do NOT tighten to 15 — code comment :972-975: a genuine 20 deg head roll is ~23mm; 15 rejects real pitch moves)"}
+      - {TODO: "NEW bridge test target applications/tobiifree-opentrack/build.zig (zig build test importing tobii_filter + core + calibration): (a) validity gate holds n=2 while per-eye 2D plausible, (b) debounce smooths 5Hz n-flap, (c) n1 pitch stable under mm-scale Y wobble"}
+    GATE_NOTE: "no security-reviewer needed (no USB/socket/file-io diffs)"
 
   BATCH_2:
-    TITLE: "Calibration Auto-Fit"
-    STATUS: DONE
-    FILES: [driver/src/calibration.zig, applications/tobiifree-opentrack/src/main.zig]
-    INVARIANT: "center_stare → g_gaze_norm==(0.5,0.5)"
+    TITLE: "Corner RANGE recovery — reach full edge turn in-game (inner 60% fix)"
+    STATUS: IN_PROGRESS # rework v3 output-space drift cap code+QA green 2026-08-30; DEPLOYED v3 GUI bridge (PID 13493) 2026-08-30; USER GATE PENDING (at screen)
+    USER_FEEDBACK: "USER (2026-08-29, after first fix): (1) left/right + lower corners now reach the edge OK but then the view OVERSHOOTS — creeps to ~90° while HOLDING at the corner (exceeds the normal head/eye tracking range; NOT wanted). (2) upper left/right corners STILL not recognized — the range recovery never engages there. Process note: build marked BATCH_2 DONE prematurely without the user gate — corrected; gate is mandatory."
+    REWORK: "fix 1 = drift STOP control: velocity gate (drift only runs while the single-eye translation estimate is genuinely MOVING — a held corner has a static/wobbling eye, no drift) + n=1 anchor bound (drift never extends past the n=2 occlusion turn + n1_extra_max 15 deg raw). fix 2 = RADIAL gaze gate (gaze_radial = sqrt(yaw^2+pitch^2) > 10 deg engage / < 6 disengage, plus |gaze_yaw|>2) for the drift + ratio floor + corner-hold witness — upper corners are diagonal looks with small horizontal gaze component."
+    REWORK_QA: "v1 (2026-08-29): bridge 11/11 + driver 23/23 green; USER GATE FAILED 2026-08-30 (overshoot + upper corners intermittent — see TRACE_DIAGNOSIS). v2 (2026-08-30): drift target is GAZE-ANCHORED (n1_anchor_yaw + side*clamp(|gaze_yaw|*n1_gaze_gain,0,n1_extra_max_deg)) instead of chasing the LIVE single-eye translation; engage = GAZE-DWELL (radial>10 AND |gy|>2 sustained >= n1_gaze_dwell_s=0.12s) replacing the velocity gate; pitch = gaze-anchored (n1_pitch_anchor + clamp(gaze_pitch*0.5,±12) eased at 8 deg/s). v2 QA GREEN 2026-08-30: bridge 11/11 (BATCH_2d/e/f rewritten to v2 target math: 2d runaway eye 12->45 deg stops at gaze target anchor+clamp(20*0.7,0,15)=+14 raw NOT the runaway; 2e upper-left diagonal gaze -8deg engages to anchor+5.6; 2f flip=true +14 raw target, output 29>=0.85*full_turn=21.25 AND <= anchor+15.5) + driver 23/23. Deployed to running bridge 2026-08-30 (daemon 12067, bridge 12334 TOBII_TRACE=1, fresh trace /tmp/opencode/tobii-run/bridge-trace.log); USER GATE FAILED AGAIN 2026-08-30 (USER_TEST_2 verdict: LOWER corners overshoot ~90-deg creep + upper sometimes; see TRACE_DIAGNOSIS). v3 (2026-08-30): OUTPUT-SPACE DRIFT CAP — root cause of the persistent overshoot = v2 raw-space bound (anchor+n1_extra_max_deg=15 raw) was tuned head_gain=1.0+linear curve, but real rig edge amplification ~8x (gain 2.0 x Tobii-spline slope ~4 deg/deg at 20-35 input) -> drift lg 8.5->13-15 raw -> output fy 124-145 deg (lg~9 raw -> ~95 = correct natural edge). FIX: cap the drift TARGET in OUTPUT space via new invertCurve() helper + const n1_drift_max_out_deg=95.0; out_cap_raw=invertCurve(curve_mode,95,max_yaw,curve_exp,false)/head_gain (~9.33 raw on user rig); yaw_target capped to +-out_cap_raw BEFORE deeper-check (eases at n1_drift_rate — cap on TARGET not live lg; live-clamp attempt broke BATCH_1e's lg=-25->160 hold with instant snap). v3 QA GREEN 2026-08-30: bridge 12/12 (new BATCH_2g real-rig output-space cap test: n=2 pivot to 5-deg anchor, R eye runaway 5->25 deg over 270 frames, gaze pinned 0.7 (realistic corner look — 0.85 was unrealistically strong and inflated the gaze TUG), asserts max_fy<=105 (drift capped at 95 + ~5 residual = legit eye_ratio tug) AND >=80; BATCH_2g dev iterations: anchor 10 deg FAILED (already maps to ~100 output > cap) -> 5 deg) + driver 23/23. v3 NOT YET DEPLOYED (running GUI bridge PID 13208 = v2 binary); USER GATE PENDING (a) no 90-deg creep while holding corners (b) upper corners now engage (c) general movement fluid."
+    USER_TEST_2: "VERDICT 2026-08-30 (bridge 74553, TOBII_TRACE=1, ~3-4 min test): general movement NOT fluid yet; corners still far from accurate, ESPECIALLY upper; left/right OK; LOWER corners OVERSHOOT (same ~90-deg creep as before); upper corners SOMETIMES captured, sometimes not."
+    TRACE_DIAGNOSIS: "2026-08-30, 14k samples. (1) OVERSHOOT root: the drift chases the LIVE single-eye translation (turn_est) which CREPS outward on the real device while the user holds a corner — RD @4079: gaze pinned gy 13-19 (stable) but translation carried lg -4.07 -> -18.12 to the anchor+15 bound -> output 166 (the '90-deg view swing'). The velocity gate (n1_est_motion >= 1 deg/s) PASSES slow creep, so the drift keeps pushing to the bound. (2) UPPER CORNERS root: the SAME velocity gate BLOCKS the drift when the user looks at UL/UR with a STILL head (eyes-only) — RU @2415: gaze radial 20.6, gy 16.28 (radial gate passed) but translation frozen (hp 7.96 constant) -> est_motion 0 -> lg frozen -4.29, d=0.00. (3) PITCH: n=1 pitch follows the single-eye Y which drifts down at lower corners (view dives toward 90) and never follows the gaze UP at upper corners. FIX DESIGN: replace translation-velocity gate with GAZE-DWELL engage (gaze radial > 10 + |gy| > 2 sustained >= 0.12 s); make the drift target GAZE-ANCHORED (anchor + side*clamp(|gaze_yaw|*gain,0,extra)) so it is STABLE while holding (no creep) and scales with how deep the user looks (upper corners engage); add gaze-anchored PITCH (anchor + clamp(gaze_pitch*0.5,±15), eased) so corners follow up/down without diving to 90."
+    DONE_NOTE: "FIRST FIX (superseded by user feedback): drift target reworked to turn_est = -asin(dx/neck) in raw-yaw units (was sign-inverted absolute target); authority 0.70 as per-frame proportional gain; outward-only gate (kills the 5-10% inward jump; dbg5 static hold 166.99->166.99 zero sag; dbg6 ratio 0.980). Bridge 8/8 + driver 23/23 green at that point. The outward-only gate + turn_est chase recovered the range but OVERSHOT while holding (no stop) and ignored upper corners (yaw-only gate)."
+    INVARIANT: "synthetic one-eye corner (gaze pinned > 10 deg, eye origin translating laterally) -> output yaw reaches >= 85% of equivalent interocular turn within 2s"
+    ACCEPTANCE: "user looks at L/R screen edge -> in-game view reaches edge range (~90%+), no overshoot/snap"
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test && cd applications/tobiifree-opentrack && zig build test"}
     STEPS:
-      - {DONE: "PRE_CHECK: presets persist via presets.json (user only); builtins from code; fitted affine in ~/.config/tobiifree-opentrack/calibration.json, overlaid on active preset"}
-      - {DONE: "add gaze_x_offset/gaze_x_scale to Preset (defaults 0.0/1.0)"}
-      - {DONE: "fitAffine(result_gaze,factor): regress pre-affine vs known GUI points; least-squares per axis over 5pts → {offset,scale}; guard |scale|<0.1 or !finite → identity+warn"}
-      - {DONE: "apply fitted after wizard finish: persist→calibration.json, overlay→g_opts.p via applyCalFit(), re-apply on loadPreset()"}
-      - {DONE: "bridge onGaze: gui_x=(phys_x+x_off)/x_scl; gui_y=(phys_y+y_off)/y_scl; per-eye likewise"}
-      - {DONE: "CLI flags --gaze-x-offset/--gaze-x-scale + override tracking + usage() updated"}
+      - {DONE: "corner drift target REWORKED (plan deviation, see DONE_NOTE): turn_est = -asin(dx/neck) in raw-yaw units; authority 0.70 as per-frame proportional gain; outward-only gate"}
+      - {DONE: "n1_drift_rate 15 deg/s pre-gain (~36 deg/s final at head_gain 2.4)"}
+      - {DONE: "corner eye-ratio floor: |gaze_yaw| > corner_engage_deg -> effective_eye_ratio >= 0.35 (was ramp to 0.15) — keeps gaze tug pulling at corners"}
+      - {DONE: "drift engagement HYSTERESIS: engage |gaze_yaw| > 10 deg, disengage < 6 deg; near-center stays frozen (BATCH_2c)"}
+      - {DONE: "bridge tests: BATCH_2a (>= 85% equivalent turn, realistic mid-turn one-eye geometry), BATCH_2b (ratio floor at pinned corner), BATCH_2c (near-center frozen)"}
+      - {DONE: "REWORK v2 (2026-08-30): drift target GAZE-ANCHORED (stable while holding -> no creep), engage = GAZE-DWELL (replaces velocity gate that blocked upper corners), pitch gaze-anchored (lower corners stop diving to 90, upper follow up-look). Removed n1_last_est/n1_est_motion; new n1_pitch_anchor/has_n1_pitch_anchor/n1_gaze_dwell fields + n1_gaze_dwell_s/n1_gaze_gain/n1_pitch_gain/n1_pitch_extra_max/n1_pitch_rate consts."}
+      - {DONE: "REWORK v2 tests: BATCH_2d/e/f rewritten to v2 target math (gaze-anchored); bridge 11/11 + driver 23/23 GREEN 2026-08-30"}
+      - {DONE: "USER GATE (2026-08-30, bridge 74553 v2 GUI): FAILED — still 90-deg overshoot/creep at LOWER corners while holding + upper corners sometimes. See USER_TEST_2 + TRACE_DIAGNOSIS."}
+      - {DONE: "REWORK v3 (2026-08-30): OUTPUT-SPACE DRIFT CAP — invertCurve() helper + n1_drift_max_out_deg=95.0; out_cap_raw=invertCurve(curve_mode,95,max_yaw,curve_exp,false)/head_gain; yaw_target capped BEFORE deeper-check (cap TARGET not live lg — live-clamp attempt broke BATCH_1e). Root cause: v2 raw-space bound + real-rig edge amplification ~8x -> output 124-145 deg; cap holds at natural edge ~95."}
+      - {DONE: "REWORK v3 tests: new BATCH_2g (real-rig output-space cap: 5-deg anchor, R-eye runaway 5->25, gaze 0.7 realistic, asserts max_fy<=105 & >=80); bridge 12/12 + driver 23/23 GREEN 2026-08-30"}
+      - {DONE: "DEPLOY v3 (2026-08-30): built ReleaseSafe bridge (cache-dir /tmp/zig-local-cache-b3r) + daemon (cache-dir /tmp/zig-local-cache-d3r), copied via .zig-local/ (NFS install workaround), BUILD_INFO.txt written (commit 5e7a301+BATCH2.5-invertCurve-fix). Daemon PID 13368 up on gaze.sock (USB handshake complete, streaming). Bridge v3 GUI PID 13493 (no --headless, setsid): connected to daemon, calibration loaded (y-scale 1.365 positive), streaming 48B UDP 127.0.0.1:4242 — 133 pkts/4s captured. Environment note: session was reset (no prior procs), daemon had to be restarted fresh; X4/OpenTrack receiver NOT running this session so no :4242 listener — verified emission via UDP capture instead."}
+      - {DONE: "USER GATE (v3, 2026-08-30, bridge 74553): FAILED — corners STILL far from accurate; general movement not fluid; jumpy on corners. Full rework v4.x (below) replaces the v3 range-only approach with corner-hold STABILITY + release-ease (the wobble/jump was a hold/release problem, not a range problem)."}
+      - {DONE: "REWORK v4.1-v4.5 (2026-08-30, corner jumpiness): real-rig trace (20.5k lines) root-caused 3 bugs: (1) upper-corner hold release: gaze_pinned guard |gaze_yaw|>4.0 vs radial corner_pin_deg 12 — horizontal gaze collapses toward center at a held diagonal -> guard flips -> hold released -> +6.75 deg pop in ONE frame (FIX: guard 4.0->3.0); (2) release-ease START-VALUE bug: pin only engages after sag > corner_hyst_deg so when yaw sat exactly at corner_peak, ease= yaw (sagged -10.79 vs held -13.81) -> +12.6 deg single-frame pop (FIX: new cornerReleaseStart() helper returns corner_peak when corner_pin_active OR yaw within [0, peak] on the corner side — used in BOTH release paths); (3) curve-amplified release sweep: fixed 60 deg/s PRE-CURVE ease step = ~2.5 deg/frame (~225 deg/s OUTPUT) at the Tobii edge slope ~4x (FIX: yawCurveSlope() numeric-slope helper scales the step so OUTPUT sweeps at corner_release_rate_deg_s; catch-up condition in OUTPUT space). v4.5 QA GREEN: bridge 21/21 (new BATCH_2k upper-corner hold-vs-horizontal-gaze-dip, BATCH_2l release-from-held-peak) + driver 23/23."}
+      - {DONE: "USER GATE (v4.4, 2026-08-30): FAILED (1/4) — upper corners now engage reliably (b) but general corner fluidity still jumpy (c). v4.5 fixes released the (3) above; re-gate required."}
+      - {DONE: "DEPLOY v4.5 (2026-08-30): ReleaseSafe rebuild (cache-dir /tmp/zig-local-cache-v45, fresh), copied .zig-local/tobiifree-opentrack/bin/tobiifree-opentrack + BUILD_INFO.txt ('5e7a301+v4.5-corner-hold-release-ease'). Old bridge (36691) killed. v4.5 bridge PID 42132 live: connected to daemon 13368 gaze.sock, calibration (y-scale 1.347 positive) loaded, streaming UDP 127.0.0.1:4242, TOBII_TRACE=1 -> /tmp/opencode/tobii-run/bridge.log."}
+      - {DONE: "USER GATE (v4.5, 2026-08-30, bridge 42132): FAILED (2/4) — creep 'mostly gone' but 'left upper rarely works' (UL reach: hands-only look hp -7.4..-9.8, rw -54, fy -57, never past ~60% of the ~95 edge) + 'small jitter everywhere'. 4,262-row trace analysis: @449 pop bug (46 deg/frame at ch=1: same-side pin guard hard-fails when the head-rotation estimate crosses center — yaw +6.76 -> -0.54, gy +15 still pinned — while the translation witness lags; fy 44.52 -> -1.67 in ONE frame); hold jitter p50 0.34 deg/frame (tug gate re-arm ramp ~0.42/frame + curve-amplified center micro-noise); gaze reach asymmetric (left max|gy| 25 vs right 31)."}
+      - {DONE: "REWORK v4.6 (2026-08-30, corner reach + release): (1) ROTATION-CROSS RELEASE (@449): new corner_held_yaw field records the post-pin output value each hold frame; the pin else-branch releases like head_returned (latched, eased) when yaw*gaze_side <= 0 while the hold is active; cornerReleaseStart returns corner_held_yaw in the crossed case. No more single-frame pop when the estimate crosses center under a pinned gaze. (2) n=2 CORNER REACH (UL gap): mirror the n=1 gaze-anchored drift in the n=2 hold branch — corner_peak extends outward toward corner_peak + side*|gaze_yaw|*n1_gaze_gain*head_gain at n1_drift_rate*head_gain, capped at the natural edge (hold_edge_in -> the same OUTPUT-space cap that ended the 90-deg creep); the pin then holds the extended peak. (3) tug_smoothing 0.85 -> 0.88 (fc_min 1.2 -> 1.08 Hz) for the hold/small jitter. v4.6 QA GREEN: bridge 23/23 (new BATCH_2m rotation-cross release no-pop, BATCH_2n n=2 eyes-only UL reach to >=88 deg and <=100 cap; BATCH_2a/2f references re-measured with gaze-at-center so the n=2 reach can't inflate the equivalent-turn baseline) + driver 23/23."}
+      - {DONE: "DEPLOY v4.6 (2026-08-30): ReleaseSafe rebuild (cache-dir /tmp/zig-local-cache-v46b, fresh), binary o/31c2a10c... md5 3f5fb7e2. CAUGHT deploy bug: first copy went to the REPO-ROOT .zig-local/ but the bridge actually execs applications/tobiifree-opentrack/.zig-local/ (process inode mismatch + old trace format n1t= proved the running 'v4.6' was still v4.5 md5 cb5cb6e0) — the earlier user test + overshoot observation were on v4.5. Fixed: v4.6 copied to the CORRECT applications-level .zig-local/tobiifree-opentrack/bin/ + BUILD_INFO.txt ('5e7a301+v4.6-corner-reach-release-fix'). Bridge PID 55808 live: connected daemon 13368, calibration loaded, new trace format (cp/chy fields, n1t removed), already holding ch=1 n=2 at rw=-95.00 fy=-95.00 cp=-19.03 (n=2 reach reached the natural edge)."}
+      - {TODO: "USER GATE (v4.6, at screen): (a) no 90-deg creep while HOLDING L/R corners (~95 deg hold), (b) UPPER corners — incl. LEFT-upper — engage AND reach the edge (the UL reach gap), (c) no single-frame pops on hold/release (the @449 cross), (d) OBSERVE lower-corner pitch no dive toward 90. NOTE: X4 must be running to consume UDP 4242."}
+      - {DONE: "NEW USER OBSERVATION (v4.5 GUI, 2026-08-30): fast left/right head turns make the HEAD-viz dot SHOOT ~50% past the ring then correct back — transient peak in the final output yaw. ROOT-CAUSED in the v4.6 test trace (frames 3258-3266): One-Euro fc_max = 4 Hz at smoothing 0.90 cannot track a ~220 deg/s head reversal — smoothed yaw lags ~6-10 frames across center (frame 3258: hp=-4.1 but rw=+24.5, the dot points the WRONG way while the head crossed), and the Tobii curve amplifies the stale signal (yaw 5.08 -> rw 35.0 = 48% past the ring edge). NOT a corner bug. FIX EXPERIMENTED (v4.7: fc_d 1->3, fc_max_mult 30->150; sim: reversal lag 11.2->6.3 deg, rest jitter unchanged 0.0030->0.0031) BUT REVERTED at release — it broke BATCH_2i (release-ease step > 6.0 bound) and was not user-tested. DEFERRED to tech-debt."}
+      - {DONE: "RELEASE DECISION (2026-08-30): user approved shipping the current state as v0.2.7 with the jitter + fast-turn overshoot as documented tech debt (GUI eyes visibly micro-moving at rest needs smoothing). v4.6 (23/23 bridge + 23/23 driver green) is the release build; v4.7 One-Euro experiment reverted from the tree. Tag v0.2.7 + push + gh release (BATCH_8 partially executed early). Remaining plan work: BATCH_2 user re-gate (corner hold/reach verification on v4.6), BATCH_3/4 (jitter + jaw filter, data-derived), BATCH_5-8."}
+    GATE_NOTE: "behavior change user will feel at edges — manual test gate required before BATCH_3; (d) pitch-dive is an observation checkpoint, not a separate gate"
+
+  BATCH_2.5:
+    TITLE: "invertCurve cap-cancellation fix + x4-preset regression (plan-agent retrospective 2026-08-30)"
+    STATUS: DONE # code + QA green 2026-08-30 (bridge 16/16 incl 3 new invertCurve tests + BATCH_2g-x4; driver 23/23)
+    DONE_NOTE: "2026-08-30: invertCurve .tobii branch now scales the output target by the cap (out*180/cap yaw, *90/cap pitch) BEFORE walking the pts table, and uses BISECTION instead of a linear lerp (Catmull-Rom is a cubic — the lerp was off by ~2.3 deg near the {20,100}->{35,160} knot at cap=120, caught by the round-trip test). invertCurve made pub (applyCurve already pub). Zig 0.15 gotcha discovered: imported-file tests (in tobii_filter.zig) are NOT auto-run — only test-root file tests execute; moved the 3 invertCurve tests into bridge_tests.zig where they actually run. Behavior-neutral on tobii-official (max_yaw=180, scale 1.0). Verified x4 path: invertCurve(95, cap=120) -> raw 30.6 -> output exactly 95 (was raw 18.67 -> 63.3 deg under-cap)."
+    RATIONALE: "Code review finding: invertCurve() (tobii branch) inverts assuming out=catmull(x), but applyCurve computes out=catmull(x)*cap/180 (yaw) / *cap/90 (pitch). Exact ONLY when cap=180/90 (tobii-official default — user's rig). On x4/x4-smooth (max_yaw=120) the inversion is WRONG: invertCurve(95) returns raw 18.67, real output there is 63.3 deg -> the n=1 drift would UNDER-CAP and the view stops short of the edge. Latent bug; does NOT bite the user rig today (max_yaw=180) — fix before x4 presets are used at corners. Behavior-neutral on tobii-official (scale 180/180=1.0)."
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd applications/tobiifree-opentrack && zig build test"}
+    STEPS:
+      - {DONE: "fix invertCurve (tobii branch): scale the target by the cap BEFORE walking the pts table — yaw: catmull_target = out*180/cap; pitch: out*90/cap — so returned raw satisfies applyCurve(raw)==out for ANY cap"}
+      - {DONE: "new regression test BATCH_2g-x4: BATCH_2g scenario with max_yaw=120 + head_gain=2.0 + flip_yaw -> drift output reaches >= natural edge (~63) and stays <= cap+slack (no under-cap stop-short)"}
+      - {DONE: "confirm bridge 12/12 + new test + driver 23/23 still green after the fix — FINAL: bridge 16/16 (13 original + BATCH_2g-x4 + 3 invertCurve round-trip/monotonic/pitch) + driver 23/23 GREEN"}
+    GATE_NOTE: "QA-only gate (no user-facing behavior change on tobii-official); safe to run in parallel with the BATCH_2 v3 deploy + user gate"
 
   BATCH_3:
-    TITLE: "Framing Diagnose+Fix"
-    STATUS: DONE
-    FILES: [driver/src/socket_source.zig, driver/src/daemon_protocol.zig, applications/tobiifreed/src/main.zig]
+    TITLE: "Corner Diagnostics FIRST — data for BATCH_4 jaw filter thresholds"
+    STATUS: TODO
+    INVARIANT: "structured key=value log lines, >= 10 Hz while |gaze_yaw| > 10 deg, machine-parseable"
+    DELIVERABLE: "jaw artifact state (n=1 vs n=2) + jaw_diff distribution -> BATCH_4 design + threshold"
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test && cd applications/tobiifree-opentrack && zig build test"}
     STEPS:
-      - {DONE: "READ dispatchMessage/processMessages framing logic"}
-      - {DONE: "READ encodeResponse: HEADER_SIZE+1+payload.len; response=[cmd_type][payload]"}
-      - {DONE: "HYPOTHESIS CONFIRMED: daemon checks payload_len==72 on RAW TTP but TLV=3×48B+2B≈146-164B → fails → raw TLV sent"}
-      - {DONE: "FIX: onResponse decode TLV via core.decode_display_area() then extend to 112B"}
+      - {TODO: "upgrade TOBII_TRACE block (tobii_filter.zig:1222-1226) -> structured 10Hz log when |gaze_yaw|>10deg: validity_L/R, plaus_L/R, n, corner_hold, jaw_diff=|L_y-R_y| (PLAUSIBILITY-GATED, 'NA' when an eye is lost), n1_y_anchor_drift, n1_timer, pitch_rate"}
+      - {TODO: "CLI flag --diag-corners (bridge main.zig arg parse ~:1790-1832) enabling verbose corner logging in headless mode"}
+      - {TODO: "per-point calibration quality log (calibration.zig finalizePoint ~:152-168): valid_count/total, eye_loss_rate, avg_jaw_diff"}
+      - {TODO: "USER SESSION: user plays 10 min with --diag-corners + deliberate jaw/talking at corners -> correlate artifacts with n=1/n=2 state (this is the data BATCH_4 needs)"}
+    GATE_NOTE: "BATCH_4 is BLOCKED on this batch's user-session data"
 
   BATCH_4:
-    TITLE: "Cleanup"
-    STATUS: DONE
+    TITLE: "Jaw/Pitch Artifact Filter — threshold from BATCH_3 data, n=1-capable"
+    STATUS: TODO
+    INVARIANT: "synthetic jaw wobble (mm-scale Y oscillation at 2-5Hz) -> output pitch moves <= 2 deg"
+    ACCEPTANCE: "user talks/chews at corner -> no pitch bounce in view"
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test && cd applications/tobiifree-opentrack && zig build test"}
     STEPS:
-      - {DONE: "remove debug hex logging from bridge onDaemonResponse"}
-      - {DONE: "keep minimal payload_len diagnostic for get_display_area"}
+      - {TODO: "DESIGN from BATCH_3 data: (a) artifacts in n=2 -> plausibility-gated |L_y-R_y| jaw gate with data-derived threshold; (b) artifacts in n=1 -> single-eye Y wobble-rate gate (high-pass residual) + pitch-velocity clamp; (c) verify pitch_glitch_deg=5 deg/frame (:619) suffices"}
+      - {TODO: "implement chosen mechanism in tobii_filter.zig n=1/n=2 pitch path (~:966-982, :854-855); threshold from BATCH_3 logs, NOT a guess"}
+      - {TODO: "per-eye Y low-pass extension if BATCH_3 shows residual high-freq wobble after BATCH_1 LP"}
+      - {TODO: "bridge tests: jaw wobble in both n=1 and n=2 states -> pitch frozen/unchanged"}
+    GATE_NOTE: "DO NOT ship with hardcoded 0.12 threshold — must be data-derived"
 
   BATCH_5:
-    TITLE: "QA Gate — runtime diagnose"
-    STATUS: DONE
+    TITLE: "Calibration Quality Gates — safe (no hard-fail on corners)"
+    STATUS: TODO
+    INVARIANT: "calibration completes with 5 points even if a corner is weak; weak corners -> retry + warning, never abort"
+    ACCEPTANCE: "wizard run at screen: all 5 points capture; BL/BR corners succeed with <= 3 retries"
+    SUBAGENTS:
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test"}
+      ux-reviewer: {WHEN: "wizard warning UX", NOTE: "corner quality warning shown, not fatal"}
     STEPS:
-      - {DONE: "bridge ReleaseSafe build PASS (NFS cache)"}
-      - {DONE: "daemon ReleaseSafe build PASS (NFS cache, untouched)"}
-      - {DONE: "driver zig build test PASS (untouched)"}
-      - {DONE: "RUNTIME TRACE: raw_y at screen center ≈0.47-0.51 → CENTERED geometry confirmed"}
-      - {DONE: "DIAGNOSED: axis direction inverted (see CONTEXT NEW ROOT CAUSE); not a static-code oscillation"}
+      - {TODO: "corner eye_loss_rate > 30% at points 1-4 -> RETRY + warn (reuse BATCH_3 per-point log), NOT abort (calibration.zig:152-168)"}
+      - {TODO: "MIN_VALID_PER_POINT 15 -> 30 (17%; calibration.zig:36); MAX_POINT_RETRIES 3 -> 4 (:37) — modest, keeps BL/BR feasible in device weak zone"}
+      - {TODO: "remove the draft's redundant double gate (MIN_VALID 60 AND fail>30% were the same signal)"}
+      - {TODO: "bridge tests: synthetic weak corner (8% validity) -> retry path, run completes with retries"}
 
   BATCH_6:
-    TITLE: "Axis Direction Fix (mirror-of-X) + single source of truth"
-    STATUS: DONE
-    INVARIANT: "gui_y ∝ +raw_y (device raw_y is top-down / GUI-like); pipeline == GUI == fitAffine all call ONE helper"
+    TITLE: "Display-Area / Factor Consistency + Optional Expansion Experiment"
+    STATUS: TODO
+    INVARIANT: "no silent factor divergence: preset factor vs daemon 112B factor mismatch is logged at startup"
+    ACCEPTANCE: "bridge startup log shows factor source + no mismatch warning on default setup"
     SUBAGENTS:
       qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test"}
-      security-reviewer: {WHEN: "diff touches driver/src/*.zig (file-io)", DIFF: "git.diff()"}
-      librarian: {WHEN: "on BATCH_COMPLETE", SYNC: ".docs/tech-debt.yaml, .docs/session.yaml"}
+      security-reviewer: {WHEN: "diff touches tobiifreed/main.zig (USB display-area path)", DIFF: "git.diff()"}
     STEPS:
-      - {DONE: "add pub fn deviceToGui(raw:[2]f64, f:f64) [2]f64 to driver/src/tobiifree_core.zig: out=(raw−(0.5−0.5/f))·f for X and Y (NO Y inversion)"}
-      - {DONE: "call deviceToGui in tobii_filter.zig:811-812 (pipeline) instead of inline formulas"}
-      - {DONE: "call deviceToGui in main.zig:494-498 (GUI dot) + main.zig:515-527 (per-eye ×2)"}
-      - {DONE: "call deviceToGui in calibration.zig:326 (fitAffine pre_y) — SAME helper so wizard fit matches pipeline"}
-      - {DONE: "remove stale/inverted comment blocks (main.zig ~487-498 dead [0,1/f] text, B3 narrative)"}
-      - {DONE: "driver test: deviceToGui f=2.5 maps raw_y {0.3,0.5,0.7}→{0.0,0.5,1.0}; assert X path identical to Y (regression for this exact bug class)"}
+      - {TODO: "startup consistency check: bridge compares g_physical_config.track_box_factor (daemon 112B, main.zig:1277-1283) vs g_stream_preset.track_box_factor -> log WARN on mismatch (pipeline vs GUI divergence trap)"}
+      - {TODO: "driver test: 112B get_display_area response carries factor (tobiifreed/main.zig:143-163) — assert factor round-trips"}
+      - {TODO: "OPTIONAL manual experiment (user decision, NOT critical path): factor 3.0/3.5/4.0; EACH = daemon --track-box-factor restart + bridge --track-box-factor + delete calibration.json + wizard re-run + corner coverage note (documented coupling, do NOT skip wizard)"}
+      - {TODO: "docs/x4-foundations-opentrack.md: track_box_factor recommendation + factor<->calibration coupling warning"}
 
   BATCH_7:
-    TITLE: "Calibration hardening (valid now that direction is right)"
-    STATUS: DONE
+    TITLE: "UX — extended track-area viz + uncalibrated badge (ux-reviewer folded)"
+    STATUS: TODO
+    INVARIANT: "GUI communicates track extent; dot-outside-box is intentional, not confusing"
+    ACCEPTANCE: "user reads the GUI: sees dimmed extended area beyond screen rect; sees 'run wizard' hint when uncalibrated"
     SUBAGENTS:
-      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test"}
-      librarian: {WHEN: "on BATCH_COMPLETE", SYNC: ".docs/session.yaml"}
+      ux-reviewer: {WHEN: "planning + after code", NOTE: "acceptance criteria folded into plan-spec"}
+      qa-tester: {WHEN: "after code", CMD: "cd driver && zig build test && cd applications/tobiifree-opentrack && zig build test"}
     STEPS:
-      - {DONE: "fitAxis guard stays (reject scale≤0.1) — correct; no longer falsely rejects valid fits"}
-      - {DONE: "wizard completion log: print fitted x/y offset+scale; WARN if far from identity (scale≈1, offset≈0 expected)"}
+      - {TODO: "draw dimmed extended-track-area rect in drawViz (main.zig:708-780) — screen rect bright, track extent dim, dot outside = intentional"}
+      - {TODO: "'uncalibrated — run wizard' badge when no calibration.json (main.zig GUI)"}
+      - {TODO: "encode per-batch ACCEPTANCE_CRITERIA (above) into the shipped plan + CHANGELOG"}
 
   BATCH_8:
-    TITLE: "Docs / ledger sync"
-    STATUS: DONE
+    TITLE: "Docs Sync + Tag v0.2.7"
+    STATUS: TODO
     SUBAGENTS:
-      librarian: {WHEN: "on BATCH_COMPLETE", SYNC: ".docs/bridge-pipeline.yaml, .docs/tech-debt.yaml, .docs/resolved.yaml, CHANGELOG.md, README.md"}
+      librarian: {WHEN: "post-commit", SYNC: ".docs/release.yaml, .docs/session.yaml, .docs/tech-debt.yaml, .docs/gaze-transform.yaml"}
     STEPS:
-      - {DONE: ".docs/bridge-pipeline.yaml: document raw_y is top-down (GUI-like), full sign chain, gaze_pitch up=positive, X4 convention"}
-      - {DONE: ".docs/tech-debt.yaml: record NEW ROOT CAUSE + saga; moved to RESOLVED in .docs/resolved.yaml after user test"}
-      - {DONE: "CHANGELOG.md unreleased entry; fix stale README display-area line; protocol.yaml 11×f64"}
-
-  BATCH_9:
-    TITLE: "Commit fix on v0.2.6 (no version bump), FF main"
-    STATUS: DONE
-    SUBAGENTS:
-      qa-tester: {WHEN: "pre-commit gate", CMD: "just check"}
-      librarian: {WHEN: "post-commit", SYNC: ".docs/release.yaml, .docs/session.yaml"}
-    STEPS:
-      - {DONE: "commit code+tests on fix/gaze-geometry, fast-forward main, push origin"}
+      - {TODO: "CHANGELOG.md: v0.2.7 corner stability + range + jaw filter + calibration gates"}
+      - {TODO: "tech-debt.yaml: corner wobble/jaw -> resolved IF BATCH_1-4 pass user gates; display-area live-apply stays OPEN"}
+      - {TODO: "session.yaml: v0.2.7 goal + user test results; note uncalibrated-lower-half is EXPECTED (device bias, wizard corrects)"}
+      - {TODO: "gaze-transform.yaml: add FACTOR<->CALIBRATION coupling note (any factor change -> wizard re-run)"}
+      - {TODO: "tag v0.2.7, push origin main"}
 
 TECH_DEBT:
   - "display_area_config.CalibrationParams defaults 0.394/1.278 inert/stale"
-  - "per-eye viz clamped [-0.2,1.2] vs main gaze unclamped (cosmetic)"
-  - "RESOLVED (v0.2.6): gaze-Y axis direction inverted by v0.2.6 centered formula + fitAxis negative-scale guard silently discarding wizard fit. Fix: core.deviceToGui mirror-of-X (NO Y inversion) shared across pipeline/GUI/fitAffine. User manual test CONFIRMED: glance-up ⇒ dot-up + pitch-up; wizard tracks 5 points. Moved to .docs/resolved.yaml id: gaze-axis-direction."
-
-SUBAGENTS_PLAN:  # global assignment map — build honors these + per-batch SUBAGENTS
-  qa-tester: {WHEN: "after EVERY code batch", CMD: "cd driver && zig build test", GATE: "FAIL→fix→retry×3→HALT"}
-  security-reviewer: {WHEN: "diff touches driver/src/*.zig, sockets, USB, file-io", DIFF: "git.diff()"}
-  ux-reviewer: {WHEN: "GUI/CLI-facing batches (wizard, overlay, flags)", NOTE: "spawned by PLAN during planning"}
-  librarian: {WHEN: "every BATCH_COMPLETE + session end", SYNC: ".docs/*.yaml (tech-debt OPEN-only, resolved, dev-env, session)"}
+  - "per-eye viz clamped [-0.2,1.2] Y-only, X unclamped (cosmetic; BATCH_7 makes extent intentional)"
+  - "predictable-config-path: symlink hardening"
+  - "live-display-area: live apply without daemon restart (blocks in-game factor tuning)"
+  - "time-based-capture: time-based calibration windows"
+  - "x4-native-open-arch: TS Tracker -> Source interface, WsSource TS, SocketSource full daemon protocol"
+  - "corner n-flap + jaw artifacts: addressed in v0.2.7 BATCH_1-4 (pending user gates)"
+  - "n=1 range authority 0.36: addressed in v0.2.7 BATCH_2 (pending user gate)"
+  - "pipeline validity ignores per-eye 2D plausibility: addressed in v0.2.7 BATCH_1"
+  - "GUI EYE JITTER (v0.2.7 release, user-visible 2026-08-30): eyes in the GUI viz constantly micro-move at rest — needs smoothing (tug-path + per-eye). BATCH_4-adjacent; data-derived threshold required, do NOT hardcode."
+  - "FAST-TURN OVERSSHOOT (v0.2.7 release, trace-verified 2026-08-30): One-Euro fc_max 4Hz @ smoothing 0.90 can't track ~220 deg/s reversals -> smoothed yaw lags across center -> curve amplifies to ~50% past the GUI ring. Experiment v4.7 (fc_d 3, fc_max_mult 150) cut lag 11.2->6.3 deg with rest-jitter unchanged but broke BATCH_2i — needs a fixed test before re-applying."
 
 NOTES:
-  - "RE-RUN device calibration after deploy (expanded area rebuilds device model; residual bias needs affine auto-fit)"
-  - "AGENTS.md untracked — DO NOT commit"
-  - "Working tree baseline: v0.2.5 + v0.2.6 (e2cd587) — DO NOT REVERT"
-  - "BATCH_6 is the real fix: mirror-of-X (NO Y inversion) shared via deviceToGui; it ALSO unblocks the wizard fit (fitAffine uses the same helper). User manual test CONFIRMED 2026-08-23."
+  - "Order is deliberate: stability (B1) before range (B2) — user chose 'both, stability first'."
+  - "Jaw filter design (BATCH_4) is BLOCKED on BATCH_3 user-session data. Do not hardcode 0.12."
+  - "n1_y_sanity_mm stays 25 — 15mm would reject genuine 20deg head-roll Y (~23mm)."
+  - "Factor changes: daemon restart + bridge flag + wizard re-run + delete calibration.json — every time."
+  - "BATCH_1/2/4 introduce the FIRST bridge test target (applications/tobiifree-opentrack/build.zig) — driver tests alone cannot cover tobii_filter."
+  - "BATCH_6 optional factor experiment is user-decision; do NOT block BATCH_1-5 on it."
+  - "2026-08-30 retrospective (plan-agent): the recurring v0.2.7 failure pattern = tuning bounds in RAW degrees while the user feels OUTPUT degrees (real-rig gain x curve ~8x vs test rig head_gain=1.0+linear). Bounds/caps MUST be expressed in OUTPUT space (v3) AND regression tests must mirror the real preset params. Second pattern: synthetic stimuli must be realistic (gaze 0.7 not 0.85; corner-hold witness sign alignment). Third: cap the drift TARGET, never the live value (live clamp = instant snap, breaks long holds)."
+  - "User manual test gates: BATCH_1 (corner hold 5s), BATCH_2 (edge reach), BATCH_3 (--diag-corners session), BATCH_4 (talk/chew at corner), BATCH_5 (wizard 5-point)."
 
 HANDOVER:
-  STATUS: "BATCH_1-9 DONE (v0.2.6 gaze-Y axis fix CONFIRMED by user manual test)"
-  BINARY: applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack + BUILD_INFO.txt
-  NEXT: "Push to origin main; tag v0.2.6 fix if desired; tech-debt gaze-axis-direction moved to .docs/resolved.yaml"
+  STATUS: "v0.2.6 DONE & pushed; v0.2.7 plan REWRITTEN after critical review (2026-08-29)"
+  BINARY: "applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack + BUILD_INFO.txt"
+  NEXT: "Execute BATCH_1 (validity gate + debounce) -> user corner-hold test -> BATCH_2 (range) -> user edge test -> BATCH_3 (diagnostics) -> USER DIAG SESSION -> BATCH_4 (jaw filter) -> BATCH_5-8"

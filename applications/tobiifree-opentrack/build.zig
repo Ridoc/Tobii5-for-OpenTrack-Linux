@@ -135,6 +135,29 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // ============================================================
+    // Unit tests — v0.2.7 BATCH_1: FIRST bridge test target. The driver
+    // tests cover only tobiifree_core.zig protocol/parsing; this target
+    // covers the filtering pipeline (tobii_filter.zig) + calibration.
+    // Run:  zig build test   (also wired into `just check`)
+    // ============================================================
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bridge_tests.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .imports = &.{
+                .{ .name = "tobiifree_core", .module = tobiifree_core },
+                .{ .name = "daemon_protocol", .module = daemon_protocol },
+                .{ .name = "tobii_filter", .module = tobii_filter },
+                .{ .name = "calibration", .module = calibration },
+            },
+        }),
+    });
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run bridge unit tests");
+    test_step.dependOn(&run_tests.step);
+
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Run tobiifree-opentrack");
