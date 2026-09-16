@@ -1,0 +1,136 @@
+# plan-spec-v0-3.yaml — v0.3: Jitter-First + Corner Gate + Cal Quality
+PLAN_NAME: "v0-3"
+TITLE: "v0.3 Jitter-First: kill at-rest jitter (P0), re-gate corners, cal accuracy diagnostic + UX"
+VERSION: "0.1"
+DATE: "2026-09-16"
+BASE_COMMIT: "e3da30f (v0.2.7 release)"
+STATUS: "AWAITING_APPROVAL"
+
+USER_DIRECTIVE (verbatim intent):
+  - "jitter in center space must be fixed first of all!! calibration or smoothing issue. i can look at a spot and still there is jitter"
+  - "corners can be fixed after; calibration and UX and all other after that"
+  - "jitter needs to be gone with highest prio, even before corner fix"
+PRIORITY: "JITTER > CORNER_GATE > CAL_ACCURACY > UX_VIZ"
+
+RESEARCH (external assessment 2026-09-16):
+  Tropaion/Tobii_Linux: "Rust clean-room ET5 driver; --accuracy 39-target sweep (13x3) per-target/per-eye/angle-band error + diagnosis; follow-the-dot cal re-applied on EVERY connect; tolerance-region trackbox viz; guided EDID display setup. LEARNING: accuracy diag + cal re-apply + tolerance viz -> adopted."
+  njmill/tobii-linux: "ET5 native TTP reader + MediaPipe headpose + Wine stock-DLL bridge (Star Citizen). LEARNING: ML pitch model exists (non-commercial weights) -> OUT_OF_SCOPE v0.3."
+  TalonCommunity/Wiki: "screen-too-big-for-tracker -> corner dots unreachable (MIRRORS our UL-reach gap); control-mouse = look + head-lock region. LEARNING: keep cal stimulus within usable range -> reinforces corner gate checklist."
+  ADOPTED: ["accuracy-diagnostic", "cal-reapply-on-connect", "tolerance-region-viz"]
+  OUT_OF_SCOPE: ["packaging/udev", "ML-pitch-model", "gaze-mouse", "virtual-joystick", "EDID-setup-change", "native-X4-plugin"]
+
+PRODUCT_SPEC (product-owner):
+  VISION: "v0.3 kills at-rest jitter via DATA-DERIVED fix (no guesswork), re-gates corners, adds Tropaion-style accuracy diagnostic + cal re-apply on connect, polishes UX. Every fix has a measurement gate."
+  STORIES:
+    - "P0 x4-player: looking STRAIGHT at a static panel -> zero visible jitter (crosshair/view steady)"
+    - "P0 tester: --diag-jitter 30s at rest -> machine-parseable trace identifying dominant source (raw device noise | One-Euro residual | tug-path | calibration fit)"
+    - "P1 x4-player: HOLDING L/R corners stays ~95 deg, no 90-deg creep, upper corners reach edge, no pops"
+    - "P2 x4-player: --accuracy sweep -> per-target/per-eye error mm + mean/stdev -> tells if cal is good"
+    - "P2 daemon: calibration auto-re-applied on every ET5 connect (USB replug/hibernate)"
+    - "P3 x4-player: dimmed extended-track-area rect + 'uncalibrated — run wizard' badge"
+  METRICS:
+    north_star: "at-rest gaze RMS jitter < 0.15 deg output (p95)"
+    kpis: {raw_device_noise_rms: "baseline (hardware, accept)", oe_residual_rms: "< 0.10 deg", tug_deviation_rms: "< 0.20 deg", corner_reach_pct: ">= 90% each side", cal_mean_error_mm: "< 30 mm (800x330 screen)", cal_auto_reapply: "100% of reconnects"}
+  JITTER_FRAMING (data-first rule: NO alpha/gate change until BATCH_1 identifies dominant source):
+    H1_device_raw_noise: "measure raw variance pre-filter; raw_rms > 0.03 deg -> device dominant"
+    H2_pipeline_smoothing: "oe_residual = smoothed-raw; > 2x raw_noise_rms -> One-Euro/EWMA too weak"
+    H3_gui_viz_tug_path: "tug_deviation = tug_output - raw_gaze; > 3x raw_noise_rms -> drawViz smoothing separate"
+    H4_calibration_fit: "center-point error from --accuracy > 15 mm -> calibration contributor (resolves via BATCH_4)"
+
+DESIGN_SPEC (ux-designer):
+  jitter_fix_ux: "eye dots + head dot sub-0.5px idle; per-eye low-pass alpha 0.3 + tug-path EWMA; trail dots tight cluster < 3px; --debug-viz flag shows 'S:0.88 T:0.30' 11px dim text; wizard dot jitter-free during .showing_point"
+  cal_quality: "post-wizard prompt 'Accuracy check? [Yes] [Skip]'; 39-target sweep (13x3, 10% margin), 1s hold/target (~60 frames), auto-advance; per-target radial error color: green<20px yellow 20-50 orange 50-100 red>100px + radius r=6+error/20 cap 24; per-eye toggle L/R; angle bands center(3x3)/mid(ring2)/edge(outer) error_p95; CTA 'Accuracy OK — done' | 'Improve my calibration — Retry'; new CalState .accuracy_check + .show_accuracy_results; reuse g_cal_window + calDrawFunc + progress-ring style"
+  hub_readout: "OPTIONAL (BATCH_5): 6 labels top-left of drawViz (Yaw/Pitch/Roll/X/Y/Z 12px white), 1Hz, collapse < 400px, a11y AA"
+  a11y: "WCAG AA contrast; error dots color+radius paired (colorblind); ESC skip, L/R toggle, SPACE start; prefers-reduced-motion skips trails"
+
+ACCEPTANCE_CRITERIA (ux-reviewer):
+  JITTER_FIX:
+    - "GUI eye-dot displacement at rest <= 3px p95 @ typical distance; no tremor at 30Hz"
+    - "in-game yaw var <= 0.3 deg p95 / pitch <= 0.5 deg p95 over 5s hold (UDP 4242)"
+    - "fast 220deg/s reversal: lag <= 7 deg (v4.7 exp hit 6.3; v4.6 baseline 11.2); NO overshoot past ring edge"
+    - "release-ease step <= 6.0 deg (v4.7 BROKE BATCH_2i bound — regression guard)"
+    - "no deadband feel: 5-15 deg small movements respond immediately"
+    - "thresholds DATA-DERIVED from BATCH_1 baseline, NOT hardcoded (no magic 0.12)"
+    - "smoothing change visible within <= 1 frame; no re-acquisition lag after blink"
+  CORNER_GATE (v4.6 re-test, X4 running, user at screen):
+    - "(a) HOLD L/R corners ~95 deg, NO creep > 100 over 10s, no drift-to-center"
+    - "(b) UL/UR corners reach >= 88 deg yaw without exaggerated chin lift"
+    - "(c) hold->release no single-frame pop > 6 deg (covers @449); release->re-hold no pop"
+    - "(d) lower-corner hold > 5s: pitch no dive to 90; pitch var <= 2 deg p95"
+  CAL_ACCURACY_DIAGNOSTIC:
+    - "39-target sweep completes w/o crash; ESC exits cleanly (no zombie); eye-loss mid-sweep target marked 'eye_lost' visible gap, NOT silent omit"
+    - "per-target error_deg, per-eye L/R, per-angle-band (0-30/30-60/60-90)"
+    - "actionable guidance emitted ('corner accuracy poor — re-run wizard' | 'asymmetry detected')"
+    - "diagnostic does NOT write/overwrite calibration.json; separate opt-in mode, wizard untouched"
+    - "cal gates: eye_loss_rate > 30% corner pts -> RETRY + visible WARN; MIN_VALID_PER_POINT 30 (was 15); MAX_POINT_RETRIES 4 (was 3)"
+    - "visible exit + progress (reuse wizard progress-ring); 'Eye lost — waiting...' indicator"
+  UX_VIZ:
+    - "dimmed extended-track rect scales with display_area config; 'uncalibrated — run wizard' badge in GUI; badge persists until wizard success; 2-row layout intact; < 800px badge -> icon tooltip; no cold-start emptiness, no hover-only reveal"
+
+BATCHES:
+  - [ ] BATCH_1: "JITTER_DIAGNOSTICS — structured trace for jitter + corners (data-first, NO behavior change)"
+      FILES: ["applications/tobiifree-opentrack/src/tobii_filter.zig (~:2055-2069 trace block)", "applications/tobiifree-opentrack/src/main.zig (parseArgs ~:1785-1828)"]
+      WORK:
+        - "TOBII_TRACE additive fields: validity_L/R, plaus_L/R, n_eff, corner_hold, jaw_diff=|L_y-R_y|, n1_yaw_anchor_drift, n1_timer, pitch_rate; log >= 10Hz when |gaze_yaw| > 10deg"
+        - "DIAG_JITTER mode (--diag-jitter): 100-frame sliding window variance fields raw_yaw_var_100w, oe_residual_deg (smoothed-raw), tug_vs_raw_deg; 30s at rest -> summary raw_noise_rms / oe_residual_rms / tug_deviation_rms"
+        - "--diag-corners flag (headless-capable) for corner trace (from tech-debt batch3)"
+        - "per-point cal quality log (calibration.zig finalizePoint ~:147-171: valid_count/total, eye_loss_rate, avg_jaw_diff)"
+        - "INVARIANT: additive only — production path byte-identical to v0.2.7 without --diag flags"
+      SUBAGENTS:
+        qa-tester: {WHEN: after, CMD: "just check"}
+        security-reviewer: {WHEN: diff (file-io logging), DIFF: "git.diff()"}
+      TESTS: "synthetic: constant raw -> zero variance fields; sine raw -> known rms; bridge 23/23 + driver 23/23 still green"
+      GATE: "BATCH_1 run at screen: 30s hold still at center -> one source dominates > 2x others -> fix target unambiguous. USER: run --diag-jitter, capture 30s, share summary."
+  - [ ] BATCH_2: "JITTER_FIX — data-derived smoothing fix (dominant source from BATCH_1)"
+      FILES: ["applications/tobiifree-opentrack/src/tobii_filter.zig (smoothing ~:900-950, tug_smoothing, one_euro fc params)", "applications/tobiifree-opentrack/src/main.zig (drawViz ~:708-780 if H3 dominant)", "applications/tobiifree-opentrack/src/bridge_tests.zig"]
+      WORK:
+        - "fix dominant source ONLY (per BATCH_1 data + JITTER_FRAMING thresholds)"
+        - "H2 candidate: v4.7 One-Euro fc_d 1->3 + fc_max_mult 30->150 WITH new regression test covering BATCH_2i release-ease <= 6.0 bound (revert reason was broken bound, not the tuning)"
+        - "H3 candidate: per-eye dot smoothing in drawViz (separate from pipeline)"
+        - "threshold: center jitter p95 < 0.15 deg derived from BATCH_1 baseline (NOT hardcoded)"
+      SUBAGENTS:
+        qa-tester: {WHEN: after, CMD: "just check"}
+        ux-reviewer: {WHEN: after, DIFF: "git.diff()"}
+      TESTS: "regression BATCH_1a-e + BATCH_2a-n ALL PASS (v4.7 broke BATCH_2i); new: 30s synthetic still-gaze at center -> output yaw max-min < 0.3 deg"
+      GATE: "USER at screen: 'looking at a spot, the crosshair does not move' + fast-turn no overshoot + no deadband"
+  - [ ] BATCH_3: "CORNER_GATE — deferred v4.6 user re-gate (+ fixes if fail)"
+      FILES: ["tobii_filter.zig (n1_drift_max_out_deg=95, corner-hold, cornerReleaseStart, rotation-cross release) — FIX ONLY IF GATE FAILS"]
+      WORK:
+        - "re-run v4.6 checklist at screen with X4 running (deferred 2026-08-31)"
+        - "if fail: fix per failure mode (creep -> cap/target; UL reach -> n=2 reach; pops -> release-ease; pitch dive -> pitch clamp) then re-gate"
+      SUBAGENTS:
+        qa-tester: {WHEN: after any fix, CMD: "just check"}
+      GATE: "acceptance (a)-(d) all PASS at screen"
+  - [ ] BATCH_4: "CAL_ACCURACY — 39-target accuracy diagnostic + cal quality gates + auto re-apply on connect"
+      FILES: ["applications/tobiifree-opentrack/src/calibration.zig (sweep loop, finalizePoint ~:147-171, gates ~:36-37,152-168)", "applications/tobiifree-opentrack/src/main.zig (--accuracy flag, CalState .accuracy_check/.show_accuracy_results, post-wizard prompt)", "driver/src/daemon_protocol.zig or socket_source.zig (auto-apply on connect)"]
+      WORK:
+        - "--accuracy: 13x3 grid 39 targets fullscreen cairo, 1s hold each, auto-advance; per-target radial error mm + color/radius heatmap; per-eye L/R toggle; angle bands center/mid/edge error_p95; guidance CTA (Retry wizard | done)"
+        - "cal gates: eye_loss_rate > 30% corner pts 1-4 -> RETRY + visible WARN (not abort); MIN_VALID_PER_POINT 15->30; MAX_POINT_RETRIES 3->4; remove redundant double gate"
+        - "daemon auto-apply calibration on every ET5 connect (send_apply post-device-streaming; survives USB replug/hibernate)"
+        - "diagnostic NEVER writes calibration.json; wizard flow untouched"
+      SUBAGENTS:
+        qa-tester: {WHEN: after, CMD: "just check"}
+        security-reviewer: {WHEN: diff (socket daemon_protocol + config), DIFF: "git.diff()"}
+        ux-reviewer: {WHEN: after, DIFF: "git.diff()"}
+      TESTS: "synthetic weak-corner test (eye_loss_rate trigger); sweep completes + ESC clean exit; per-target/per-eye/band output asserted; auto-apply round-trip test"
+      GATE: "USER: 'i can see which points are bad and whether to re-calibrate' + auto-apply verified after replug"
+  - [ ] BATCH_5: "UX_VIZ — tolerance region + uncalibrated badge (+ optional hub readout)"
+      FILES: ["applications/tobiifree-opentrack/src/main.zig (drawViz ~:708-780)"]
+      WORK:
+        - "dimmed extended-track-area rect (scales with display_area config)"
+        - "'uncalibrated — run wizard' badge when no calibration.json; disappears on wizard success"
+        - "OPTIONAL: 6-label hub readout (Yaw/Pitch/Roll/X/Y/Z) per DESIGN_SPEC (only if 2-row layout holds)"
+      SUBAGENTS:
+        qa-tester: {WHEN: after, CMD: "just check"}
+        ux-reviewer: {WHEN: after, DIFF: "git.diff()"}
+      GATE: "visual inspection on 3440x1440 ultrawide + < 800px responsive"
+  - [ ] BATCH_6: "RELEASE — v0.3 tag + GitHub release + docs sync"
+      SUBAGENTS:
+        release-manager: {WHEN: after all batches, CMD: "qa gate(just check) -> tag v0.3.0 -> push -> gh release"}
+        session-close: {WHEN: after commit, CMD: "sync .docs/** (session, resolved, tech-debt OPEN-only) + commit"}
+
+NOTES:
+  TECH_DEBT_MOVES: "batch2-v46-user-gate -> BATCH_3 (re-gate); batch3-corner-diagnostics -> folded BATCH_1; batch4-jaw-filter + gui-eye-jitter -> BATCH_2 (jitter-first, user P0); batch5-cal-quality-gates -> BATCH_4; batch7-ux-viz -> BATCH_5; fast-turn-overshoot (v4.7) -> BATCH_2 candidate"
+  FACTOR_TRAP: "pipeline PRESET track_box_factor (tobii_filter.zig:810) vs GUI daemon 112B factor (main.zig:493) can diverge silently — batch6-factor-consistency NOT in v0.3 scope (deferred), but any cal work must not widen the divergence"
+  BUILD_QUIRK: "NFS atomic rename fails -> zig build --cache-dir /tmp/zig-local-cache-* + manual binary copy; ReleaseSafe for deploy"
+  DEPLOY: "killall tobiifreedot before restart (ONE process claims ET5); delete stale calibration.json after geometry/transform changes; verify gaze_y_scale positive"

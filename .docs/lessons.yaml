@@ -1,0 +1,33 @@
+# lessons.yaml — append-only lessons ledger (hard-won, attributed, date-stamped)
+# Indexed-docs discipline: terse; root_cause + prevention only. History in git log.
+# See .docs/index.yaml CONCEPT_ROUTES -> LESSONS
+UPDATED: "2026-09-16"
+
+LESSONS:
+  - id: "2026-09-16-plan-spec-write-quirk"
+    domain: "tooling"
+    root_cause: "opencode write/edit tool permission matcher glob `**/plan-spec-*.yaml` does NOT match an absolute path on this NFS mount (/mnt/NAS-Zeno/...) — rejected the path despite the allow rule (likely `**` glob quirk with absolute NFS paths)."
+    prevention: "When the write/edit tool rejects a plan-spec-*.yaml absolute path despite the allow rule, create the file via bash heredoc instead. If config looks stale, verify on a fresh opencode process (config loads once at startup)."
+    session: "v0-3-planning-research"
+    verified: "2026-09-16"
+
+  - id: "2026-09-16-tropaion-cleanroom-sibling"
+    domain: "research"
+    root_cause: "Before adopting external techniques, need to validate them against a clean-room sibling in the SAME ET5 protocol family rather than guessing."
+    prevention: "Cross-check any external project against our own upstream fork (tobiifree) to confirm protocol-family alignment. Tropaion/Tobii_Linux (Rust, GPL-3.0) is the closest sibling — same TTP/TLV family — so its accuracy-diagnostic, cal-reapply-on-connect, and tolerance-region viz are safe to adopt. njmill (early POC) and Talon (docs) are reference only."
+    session: "v0-3-planning-research"
+    verified: "2026-09-16"
+
+  - id: "2026-09-16-ultrawide-reach-gap"
+    domain: "calibration/UX"
+    root_cause: "Stimulus points placed at screen extremes may exceed the ET5 tracker's physical ±28 deg usable gaze range (UL-reach gap), so corner calibration points are unreachable even when the wizard places them."
+    prevention: "Keep calibration stimulus points within the usable tracked range; validate the corner gate against the tracker's physical reach, not only screen geometry. (Talon wiki 'screen too big for tracker -> corner dots unreachable' confirms this.)"
+    session: "v0-3-planning-research"
+    verified: "2026-09-16"
+
+  - id: "2026-09-16-jitter-attribution-before-fix"
+    domain: "diagnostics/jitter"
+    root_cause: "Center-space jitter could be device raw noise OR a poor calibration fit; changing smoothing/alpha without measurement is guesswork and risks masking the real source."
+    prevention: "Before touching smoothing/alpha (BATCH_2), run a DATA-DERIVED baseline first (BATCH_1 --diag-jitter + 39-target --accuracy sweep) to attribute center jitter to one source (raw device noise | One-Euro residual | tug-path | calibration fit). Only then fix the dominant source — no hardcoded 0.12 thresholds."
+    session: "v0-3-planning-research"
+    verified: "2026-09-16"

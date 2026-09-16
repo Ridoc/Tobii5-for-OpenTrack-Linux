@@ -38,6 +38,6 @@ WORKFLOW:
     qa-tester: "task(qa-tester, cmd='just check' OR 'cd driver && zig build test') — ALWAYS after code changes; FAIL→fix→resp×3→HALT"
     security-reviewer: "task(security-reviewer, diff=git.diff()) — ALWAYS when diff touches USB|socket|network|file-io|auth|package.json"
     ux-reviewer: "task(ux-reviewer) — ALWAYS for user-facing features (bridge GUI, calibration wizard, overlay, CLI flags)"
-    librarian: "task(librarian) — ALWAYS at session end + post-commit: sync .docs/*.yaml (dev-env, resolved, session, tech-debt OPEN-only) + commit"
+    session-close: "task(session-close) — ALWAYS at session end + post-commit: sync .docs/*.yaml (dev-env, resolved, session, tech-debt OPEN-only) + commit"
   SYNC: bugs→.docs/tech-debt.yaml (OPEN only; confirmed→.docs/resolved.yaml); session→.docs/session.yaml; release→.docs/release.yaml
   RELEASE: qa gate(just check) → commit → tag vX.Y.Z → push → gh release; keep CHANGELOG.md current
