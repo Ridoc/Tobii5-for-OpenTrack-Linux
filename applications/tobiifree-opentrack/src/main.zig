@@ -1678,9 +1678,12 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
         _ = c.g_timeout_add(500, struct {
             fn start(_: ?*anyopaque) callconv(.c) c_int {
                 if (g_cal_window != null) return 1;
+                const factor = if (g_physical_config) |pc| pc.track_box_factor else g_track_box_factor;
                 g_calibrator.startAccuracy(
                     if (g_physical_screen) |ps| ps.w_mm else 800.0,
                     if (g_physical_screen) |ps| ps.h_mm else 330.0,
+                    factor,
+                    g_cal_fit,
                 );
                 openCalWindow();
                 return 0;

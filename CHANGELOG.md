@@ -16,6 +16,9 @@ unreleased section tracks the working tree.
 - `build.zig`: registers `accuracy_diag` module, links gtk4 in test target for cairo draw functions.
 - Bridge tests still 29/29 pass.
 
+### Fixed
+- **Accuracy diagnostic units bug** (BATCH_1): `--accuracy` now measures **post-calibration** residual error instead of raw-device-vs-target. Applies `deviceToGui(raw, factor) + (pre+offset)/scale` before computing error_mm — edge error no longer inflated to 240 mm (true value ~55 mm on current fit). `startAccuracy()` now accepts and stores `factor` + `AffineFit`; `finalizeAccTarget()` uses the full pipeline chain.
+
 ## [v0.2.7] — 2026-08-30 (corner stability + range rework)
 
 Corner-tracking stability and range recovery (plan v0.2.7: BATCH_1 done +

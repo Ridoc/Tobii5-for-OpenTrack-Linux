@@ -75,6 +75,10 @@ pub const Calibrator = struct {
     /// Screen dimensions in mm (from physical config) for error computation.
     screen_w_mm: f64 = 0,
     screen_h_mm: f64 = 0,
+    /// Track box factor for deviceToGui (applied before fit in error computation).
+    acc_factor: f64 = 2.5,
+    /// Current gaze calibration fit (applied after deviceToGui in error computation).
+    acc_fit: AffineFit = .{},
     /// Per-band aggregate errors (filled at finalize).
     acc_center_err: f64 = 0, // targets in center 1/3 zone
     acc_mid_err: f64 = 0, // targets in middle ring
@@ -112,7 +116,7 @@ pub const Calibrator = struct {
 
     /// Start accuracy check. Reuses the calibrator's accumulators but targets
     /// are from the 39-point grid. Sets state to .accuracy_check.
-    pub fn startAccuracy(self: *Calibrator, screen_w: f64, screen_h: f64) void {
+    pub fn startAccuracy(self: *Calibrator, screen_w: f64, screen_h: f64, factor: f64, fit: AffineFit) void {
         self.state = .accuracy_check;
         self.acc_target_idx = 0;
         self.acc_brake_remaining = 0;
@@ -120,13 +124,17 @@ pub const Calibrator = struct {
         self.gaze_x_sum = 0;
         self.gaze_y_sum = 0;
         self.valid_count = 0;
+        self.acc_factor = factor;
+        self.acc_fit = fit;
         self.acc_results = [_]accuracy_diag.AccPointResult{.{}} ** accuracy_diag.NUM_ACC_POINTS;
         self.screen_w_mm = screen_w;
         self.screen_h_mm = screen_h;
         self.acc_center_err = 0;
         self.acc_mid_err = 0;
         self.acc_edge_err = 0;
-        log.info("accuracy check started — 39 targets", .{});
+        log.info("accuracy check started — 39 targets (factor {d:.2}, fit x=({d:.3}/{d:.3}) y=({d:.3}/{d:.3}))", .{
+            factor, fit.gaze_x_offset, fit.gaze_x_scale, fit.gaze_y_offset, fit.gaze_y_scale,
+        });
     }
 
     /// Feed a sample into the accuracy capture. Reuses existing feed logic
@@ -185,8 +193,13 @@ pub const Calibrator = struct {
 
         // Compute screen-space error for this target.
         const target = accuracy_diag.accTarget(idx);
-        const dx_norm = gaze_x_avg - target.x;
-        const dy_norm = gaze_y_avg - target.y;
+
+        // Apply current calibration fit: deviceToGui(raw, factor) → (pre + offset)/scale → corrected.
+        const pre = core.deviceToGui(.{ gaze_x_avg, gaze_y_avg }, self.acc_factor);
+        const corr_x = (pre[0] + self.acc_fit.gaze_x_offset) / self.acc_fit.gaze_x_scale;
+        const corr_y = (pre[1] + self.acc_fit.gaze_y_offset) / self.acc_fit.gaze_y_scale;
+        const dx_norm = corr_x - target.x;
+        const dy_norm = corr_y - target.y;
         const err_mm = @sqrt(dx_norm * dx_norm * self.screen_w_mm * self.screen_w_mm + dy_norm * dy_norm * self.screen_h_mm * self.screen_h_mm);
         self.acc_results[idx].error_mm = err_mm;
 
@@ -200,8 +213,8 @@ pub const Calibrator = struct {
             self.acc_edge_err = @max(self.acc_edge_err, err_mm);
         }
 
-        log.info("acc point {} ({d:.2},{d:.2}): gaze=({d:.4},{d:.4}) err={d:.1}mm ({d}/{d} valid)", .{
-            idx, target.x, target.y, gaze_x_avg, gaze_y_avg, err_mm,
+        log.info("acc point {} ({d:.2},{d:.2}): raw=({d:.4},{d:.4}) corr=({d:.4},{d:.4}) err={d:.1}mm ({d}/{d} valid)", .{
+            idx, target.x, target.y, gaze_x_avg, gaze_y_avg, corr_x, corr_y, err_mm,
             self.valid_count, self.sample_count,
         });
 

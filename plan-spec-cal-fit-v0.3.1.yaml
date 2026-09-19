@@ -56,7 +56,7 @@ BATCHES:
       TESTS: "bridge tests continue passing (unchanged logic); accuracy flow still works with --accuracy flag"
       GATE: "extraction complete, no behavior change; bridge tests pass"
 
-  - [ ] BATCH_1: "FIX_UNITS_BUG — accuracy diagnostic error computation applies full pipeline chain"
+  - [x] BATCH_1: "FIX_UNITS_BUG — accuracy diagnostic error computation applies full pipeline chain"
       FILES:
         - "EDIT: accuracy_diag.zig (finalizeAccTarget): apply deviceToGui(raw, factor) → (pre+offset)/scale → corrected, THEN residual = |corrected − target| × screen_mm"
         - "EDIT: calibration.zig (Calibrator struct): store track_box_factor + current AffineFit for accuracy diagnostic to use"
