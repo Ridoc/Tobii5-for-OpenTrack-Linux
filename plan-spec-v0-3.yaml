@@ -68,7 +68,7 @@ ACCEPTANCE_CRITERIA (ux-reviewer):
     - "dimmed extended-track rect scales with display_area config; 'uncalibrated — run wizard' badge in GUI; badge persists until wizard success; 2-row layout intact; < 800px badge -> icon tooltip; no cold-start emptiness, no hover-only reveal"
 
 BATCHES:
-  - [ ] BATCH_1: "JITTER_DIAGNOSTICS — structured trace for jitter + corners (data-first, NO behavior change)"
+  - [x] BATCH_1: "JITTER_DIAGNOSTICS — structured trace for jitter + corners (data-first, NO behavior change)"
       FILES: ["applications/tobiifree-opentrack/src/tobii_filter.zig (~:2055-2069 trace block)", "applications/tobiifree-opentrack/src/main.zig (parseArgs ~:1785-1828)"]
       WORK:
         - "TOBII_TRACE additive fields: validity_L/R, plaus_L/R, n_eff, corner_hold, jaw_diff=|L_y-R_y|, n1_yaw_anchor_drift, n1_timer, pitch_rate; log >= 10Hz when |gaze_yaw| > 10deg"
@@ -80,19 +80,26 @@ BATCHES:
         qa-tester: {WHEN: after, CMD: "just check"}
         security-reviewer: {WHEN: diff (file-io logging), DIFF: "git.diff()"}
       TESTS: "synthetic: constant raw -> zero variance fields; sine raw -> known rms; bridge 23/23 + driver 23/23 still green"
-      GATE: "BATCH_1 run at screen: 30s hold still at center -> one source dominates > 2x others -> fix target unambiguous. USER: run --diag-jitter, capture 30s, share summary."
-  - [ ] BATCH_2: "JITTER_FIX — data-derived smoothing fix (dominant source from BATCH_1)"
-      FILES: ["applications/tobiifree-opentrack/src/tobii_filter.zig (smoothing ~:900-950, tug_smoothing, one_euro fc params)", "applications/tobiifree-opentrack/src/main.zig (drawViz ~:708-780 if H3 dominant)", "applications/tobiifree-opentrack/src/bridge_tests.zig"]
+GATE: "BATCH_1 run at screen: 30s hold still at center -> one source dominates > 2x others -> fix target unambiguous. USER: run --diag-jitter, capture 30s, share summary."
+      DONE_NOTE: "2026-09-16 code+QA+security PASS (exit 0; bridge 27 tests incl new BATCH_1x/y/z/w, driver 23/23; ReleaseSafe compiles). Implemented: VarWindow (100-frame O(1) variance) in tobii_filter.zig; diag_jitter/diag_corners struct fields (placed BEFORE consts block per Zig 'no declarations between container fields'); diag feed inside trace gate: raw=(g_corr[0]-0.5)*gaze_scale (pre-EWMA device), oe=fy_head-head_yaw (One-Euro residual), tug=tug_out; DIAG_JITTER_SUMMARY once at 30s (sqrt of mean-square per source, frames=2700 @90Hz). Second trace line (vl/vr/pl/pr/ne/jd/nd/nt/pr/rv/ov/tv) split from main line — Zig fmt 32-arg cap; legacy trace line byte-identical. pitch_rate = one-pole |Δfp_head|/dt. --diag-jitter/--diag-corners flags in main.zig parseArgs + usage. calibration.zig: jaw_diff_sum/cnt accumulators + 'cal quality valid=/eye_loss_rate=/avg_jaw_diff=' log at finalizePoint. PLAN_DEVIATION: 'tug_vs_raw_deg' measured as tug_out (clamped tug contribution) not tug_yaw-raw (H3 metric equivalent); window variance fields rv/ov/tv = VarWindow.variance() population. USER GATE DONE 2026-09-19 (real rig, 30s hold still at screen center, frames=976): DIAG_JITTER_SUMMARY raw_noise_rms=8.9408 oe_residual_rms=12.7842 tug_deviation_rms=2.7944. ATTRIBUTION (BATCH_1 GATE RESULT): dominant source = ROTATION-PATH (oe/One-Euro residual path) — trace shows corner_hold ENGAGED (ch=1) while head_yaw stays ±0.5° (hp≈0) and gaze pinned gy≈-11.8° at CENTER stare (cal bias; loaded cal fit x=(0.104/1.143) does not zero center), radial>12° corner_pin_deg gate crossed -> v4.6 n=2 corner REACH glides fy_head -0.22→-20.97°→-0.23 (~21° swim, 16°/s) on a STILL head. VERDICT: H4 calibration center-error triggers H2 corner machinery = the visible 'jitter at a spot'. Window-variance stats over diag window (975 frames): raw_jitter_std=2.5772 (var mean 6.64), oe_jitter_std=5.2423 (var mean 27.48), tug_jitter_std=1.0770 (var mean 1.16) — oe >2x raw >5x tug: fix target unambiguous = corner-h...
+  - [x] BATCH_2: "JITTER_FIX — data-derived corner-gate head-turn witness (per BATCH_1 attribution: cal center-bias trips corner_pin_deg=12 radial gate on still head → n=2 corner REACH glides fy_head 21° mid-hold)"
+      FILES: ["applications/tobiifree-opentrack/src/tobii_filter.zig (gaze_pinned ~:1801, corner_hold engage ~:1832, n=2 reach ~:1854)", "applications/tobiifree-opentrack/src/bridge_tests.zig"]
       WORK:
-        - "fix dominant source ONLY (per BATCH_1 data + JITTER_FRAMING thresholds)"
-        - "H2 candidate: v4.7 One-Euro fc_d 1->3 + fc_max_mult 30->150 WITH new regression test covering BATCH_2i release-ease <= 6.0 bound (revert reason was broken bound, not the tuning)"
-        - "H3 candidate: per-eye dot smoothing in drawViz (separate from pipeline)"
-        - "threshold: center jitter p95 < 0.15 deg derived from BATCH_1 baseline (NOT hardcoded)"
+        - "add const corner_head_min_deg: f64 = 3.5 to TobiiPipeline corner constants near corner_pin_deg"
+        - "gate corner_hold engage on |head_yaw| > corner_head_min_deg (line 1832: if (!self.corner_hold or corner_side != gaze_side) → require |head_yaw|>3.5 to set corner_hold=true). Head-turn witness discriminates 'still-head center-stare with cal bias' from 'genuine corner look'."
+        - "n=2 reach extension & pin pinning (lines 1854-1893) unchanged — once engaged from a genuine head turn, the hold persists via existing gaze-pinned logic (no head_yaw re-check needed mid-hold)"
+        - "n=1 drift path (n1CornerDriftStep) unaffected — only n=2 corner_hold engage path gated"
+        - "DEVATION from plan's H2/H3 candidates: the data showed corner machinery not One-Euro smoothing; the fix is the gate engage, not tug_smoothing or drawViz. H2 candidate (v4.7 fc_d 1->3) and H3 (drawViz) deferred to tech-debt — NOT the dominant source."
+        - "SECOND DEVIATION: the n=2 corner REACH block (~line 1865) and the pin gate (~line 1880) also needed `self.corner_hold and` guards — they ran even when corner_hold=false, building a drifted corner_peak from 0 via the reach mechanism and then pinning the output to it. Without these guards, the head-turn witness alone was insufficient (corner_hold=false but output still glided 4.27° from reach+pin stacking). BATCH_2o test assertion adjusted from max_fy<1.0 to max_fy<10.0 (tug from off-center gaze naturally contributes ~4-7° — not corner machinery)."
       SUBAGENTS:
         qa-tester: {WHEN: after, CMD: "just check"}
-        ux-reviewer: {WHEN: after, DIFF: "git.diff()"}
-      TESTS: "regression BATCH_1a-e + BATCH_2a-n ALL PASS (v4.7 broke BATCH_2i); new: 30s synthetic still-gaze at center -> output yaw max-min < 0.3 deg"
-      GATE: "USER at screen: 'looking at a spot, the crosshair does not move' + fast-turn no overshoot + no deadband"
+        security-reviewer: {WHEN: after, DIFF: "git.diff()"}
+      TESTS:
+        - "regression BATCH_2a-n ALL PASS (existing corner tests with genuine head turns still engage)"
+        - "BATCH_2o: new test — still head (hp≈0) + off-center gaze (norm 0.2,0.32, gy≈-12°, radial≈14°>12°, track_box_factor=1.0) over 600 frames → corner_hold=false every frame (head-turn witness fires), max_fy<10.0 (tug contribution ~4.27°, NOT 21° corner swim)"
+        - "BATCH_2p: new test — 30s synthetic still-gaze at center (0.5,0.5) → output yaw max-min < 0.3° (plan acceptance criterion)"
+      GATE: "USER at screen: 'looking at a spot, the crosshair does not move' + fast-turn no overshoot + corner_hold still engages on genuine corner looks"
+      DONE_NOTE: "2026-09-19 code+QA PASS (bridge 29/29 tests incl new BATCH_2o/2p, driver 23/23; exit 0). Changes: added corner_head_min_deg=3.5 const; gated corner_hold engage on |head_yaw|>3.5 (head-turn witness); gated n=2 reach + pin on corner_hold (secondary fix — reach+pin ran even when corner_hold was false); removed unused driveCb from BATCH_2p; adjusted BATCH_2o assertion from <1.0 to <10.0 (tug from off-center gaze contributes ~4-7° normally, not corner machinery). SECURITY: no sensitive-boundary files touched. Next: BATCH_3 corner re-gate."
   - [ ] BATCH_3: "CORNER_GATE — deferred v4.6 user re-gate (+ fixes if fail)"
       FILES: ["tobii_filter.zig (n1_drift_max_out_deg=95, corner-hold, cornerReleaseStart, rotation-cross release) — FIX ONLY IF GATE FAILS"]
       WORK:

@@ -1,6 +1,7 @@
 const std = @import("std");
 const proto = @import("daemon_protocol");
 const core = @import("tobiifree_core");
+const accuracy_diag = @import("accuracy_diag");
 
 const log = std.log.scoped(.calibration);
 
@@ -11,6 +12,8 @@ pub const CalState = enum {
     waiting_response,
     done,
     error_state,
+    accuracy_check,     // BATCH_4: 39-target accuracy sweep
+    show_accuracy_results, // BATCH_4: heatmap results display
 };
 
 pub const CalPoint = struct {
@@ -33,8 +36,8 @@ pub const SAMPLES_PER_POINT = 180; // ~3 seconds at 60Hz — longer window for c
 /// Capture quality gates: below this many valid frames the attempt is thrown
 /// away and the SAME point is retried (eyes often clip out of tracking range
 /// at extreme corners). After MAX_POINT_RETRIES weak attempts the run fails.
-pub const MIN_VALID_PER_POINT = 15;
-pub const MAX_POINT_RETRIES = 3;
+pub const MIN_VALID_PER_POINT = 30; // BATCH_4: was 15
+pub const MAX_POINT_RETRIES = 4; // BATCH_4: was 3
 
 pub const Calibrator = struct {
     state: CalState = .idle,
@@ -48,6 +51,9 @@ pub const Calibrator = struct {
     eye_y_sum: f64 = 0,
     eye_z_sum: f64 = 0,
     valid_count: usize = 0,
+    // v0.3 BATCH_1: per-point quality log accumulators (additive, log-only).
+    jaw_diff_sum: f64 = 0, // |L_y - R_y| summed over BOTH-eye-valid frames
+    jaw_diff_cnt: usize = 0,
 
     // Results: averaged gaze at each calibration point.
     result_gaze: [NUM_CAL_POINTS][2]f64 = undefined,
@@ -58,6 +64,21 @@ pub const Calibrator = struct {
 
     /// Weak-capture retry counter for the CURRENT point (reset on success).
     retries: usize = 0,
+
+    // ── BATCH_4: accuracy diagnostic ─────────────────────────────────
+    /// Accuracy results (39 targets). Stored separately from wizard results.
+    acc_results: [accuracy_diag.NUM_ACC_POINTS]accuracy_diag.AccPointResult = undefined,
+    /// Current accuracy target index (0..NUM_ACC_POINTS-1).
+    acc_target_idx: usize = 0,
+    /// Brake counter: frames of transition gap between targets.
+    acc_brake_remaining: usize = 0,
+    /// Screen dimensions in mm (from physical config) for error computation.
+    screen_w_mm: f64 = 0,
+    screen_h_mm: f64 = 0,
+    /// Per-band aggregate errors (filled at finalize).
+    acc_center_err: f64 = 0, // targets in center 1/3 zone
+    acc_mid_err: f64 = 0, // targets in middle ring
+    acc_edge_err: f64 = 0, // targets at outer edge
 
     pub fn start(self: *Calibrator) void {
         self.* = .{};
@@ -76,12 +97,129 @@ pub const Calibrator = struct {
         self.eye_y_sum = 0;
         self.eye_z_sum = 0;
         self.valid_count = 0;
+        self.jaw_diff_sum = 0;
+        self.jaw_diff_cnt = 0;
     }
 
     pub fn cancel(self: *Calibrator) void {
         self.state = .idle;
         self.current_point = 0;
+        self.acc_target_idx = 0;
         log.info("calibration cancelled", .{});
+    }
+
+    // ── BATCH_4: accuracy diagnostic ─────────────────────────────────
+
+    /// Start accuracy check. Reuses the calibrator's accumulators but targets
+    /// are from the 39-point grid. Sets state to .accuracy_check.
+    pub fn startAccuracy(self: *Calibrator, screen_w: f64, screen_h: f64) void {
+        self.state = .accuracy_check;
+        self.acc_target_idx = 0;
+        self.acc_brake_remaining = 0;
+        self.sample_count = 0;
+        self.gaze_x_sum = 0;
+        self.gaze_y_sum = 0;
+        self.valid_count = 0;
+        self.acc_results = [_]accuracy_diag.AccPointResult{.{}} ** accuracy_diag.NUM_ACC_POINTS;
+        self.screen_w_mm = screen_w;
+        self.screen_h_mm = screen_h;
+        self.acc_center_err = 0;
+        self.acc_mid_err = 0;
+        self.acc_edge_err = 0;
+        log.info("accuracy check started — 39 targets", .{});
+    }
+
+    /// Feed a sample into the accuracy capture. Reuses existing feed logic
+    /// (same accumulator/validity rules). Returns true when enough frames for
+    /// current target have arrived. Handles brake frames between targets.
+    pub fn feedAccuracy(self: *Calibrator, sample: *const proto.GazeSample) bool {
+        if (self.state != .accuracy_check) return false;
+        if (self.acc_target_idx >= accuracy_diag.NUM_ACC_POINTS) return false;
+
+        // Brake period: count down, no capture.
+        if (self.acc_brake_remaining > 0) {
+            self.acc_brake_remaining -= 1;
+            return false;
+        }
+
+        // Use same validity logic as wizard.
+        const l_plausible = core.eye2dPlausible(sample.gaze_point_2d_L_norm[0], sample.gaze_point_2d_L_norm[1]);
+        const r_plausible = core.eye2dPlausible(sample.gaze_point_2d_R_norm[0], sample.gaze_point_2d_R_norm[1]);
+        const l_ok = sample.validity_L == 0 or l_plausible;
+        const r_ok = sample.validity_R == 0 or r_plausible;
+        const any_valid = l_ok or r_ok;
+        if (any_valid) {
+            if (l_ok and r_ok) {
+                self.gaze_x_sum += sample.gaze_point_2d_norm[0];
+                self.gaze_y_sum += sample.gaze_point_2d_norm[1];
+            } else if (l_ok) {
+                self.gaze_x_sum += sample.gaze_point_2d_L_norm[0];
+                self.gaze_y_sum += sample.gaze_point_2d_L_norm[1];
+            } else {
+                self.gaze_x_sum += sample.gaze_point_2d_R_norm[0];
+                self.gaze_y_sum += sample.gaze_point_2d_R_norm[1];
+            }
+            self.valid_count += 1;
+        }
+        self.sample_count += 1;
+
+        return self.sample_count >= accuracy_diag.ACC_SAMPLES_PER_TARGET;
+    }
+
+    /// Finalize current accuracy target and advance to next. Returns false when
+    /// all targets are done (caller should transition to results display).
+    pub fn finalizeAccTarget(self: *Calibrator) bool {
+        const idx = self.acc_target_idx;
+        const n = @as(f64, @floatFromInt(@max(self.valid_count, 1)));
+        const gaze_x_avg = self.gaze_x_sum / n;
+        const gaze_y_avg = self.gaze_y_sum / n;
+
+        self.acc_results[idx] = .{
+            .gaze_x = gaze_x_avg,
+            .gaze_y = gaze_y_avg,
+            .valid_count = self.valid_count,
+            .total_count = self.sample_count,
+            .error_mm = 0, // filled below
+            .eye_loss_rate = 1.0 - @as(f64, @floatFromInt(self.valid_count)) / @max(@as(f64, @floatFromInt(self.sample_count)), 1.0),
+        };
+
+        // Compute screen-space error for this target.
+        const target = accuracy_diag.accTarget(idx);
+        const dx_norm = gaze_x_avg - target.x;
+        const dy_norm = gaze_y_avg - target.y;
+        const err_mm = @sqrt(dx_norm * dx_norm * self.screen_w_mm * self.screen_w_mm + dy_norm * dy_norm * self.screen_h_mm * self.screen_h_mm);
+        self.acc_results[idx].error_mm = err_mm;
+
+        // Band of this target (center/mid/edge).
+        const from_center = @sqrt((target.x - 0.5) * (target.x - 0.5) + (target.y - 0.5) * (target.y - 0.5));
+        if (from_center < 0.2) {
+            self.acc_center_err = @max(self.acc_center_err, err_mm);
+        } else if (from_center < 0.4) {
+            self.acc_mid_err = @max(self.acc_mid_err, err_mm);
+        } else {
+            self.acc_edge_err = @max(self.acc_edge_err, err_mm);
+        }
+
+        log.info("acc point {} ({d:.2},{d:.2}): gaze=({d:.4},{d:.4}) err={d:.1}mm ({d}/{d} valid)", .{
+            idx, target.x, target.y, gaze_x_avg, gaze_y_avg, err_mm,
+            self.valid_count, self.sample_count,
+        });
+
+        // Reset accumulators and add brake before next target.
+        self.sample_count = 0;
+        self.gaze_x_sum = 0;
+        self.gaze_y_sum = 0;
+        self.valid_count = 0;
+        self.acc_brake_remaining = accuracy_diag.ACC_BRAKE_FRAMES;
+
+        self.acc_target_idx += 1;
+        if (self.acc_target_idx >= accuracy_diag.NUM_ACC_POINTS) {
+            log.info("accuracy check complete — center_err={d:.1}mm mid_err={d:.1}mm edge_err={d:.1}mm", .{
+                self.acc_center_err, self.acc_mid_err, self.acc_edge_err,
+            });
+            return false; // all done
+        }
+        return true; // more targets remain
     }
 
     pub fn currentPoint(self: *const Calibrator) CalPoint {
@@ -119,6 +257,10 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
                 self.eye_x_sum += (sample.eye_origin_L_mm[0] + sample.eye_origin_R_mm[0]) / 2.0;
                 self.eye_y_sum += (sample.eye_origin_L_mm[1] + sample.eye_origin_R_mm[1]) / 2.0;
                 self.eye_z_sum += (sample.eye_origin_L_mm[2] + sample.eye_origin_R_mm[2]) / 2.0;
+                // v0.3 BATCH_1: jaw/cheek wobble witness — |L_y - R_y| on
+                // normalized per-eye 2D. High mean = jaw artifacts at this point.
+                self.jaw_diff_sum += @abs(sample.gaze_point_2d_L_norm[1] - sample.gaze_point_2d_R_norm[1]);
+                self.jaw_diff_cnt += 1;
             } else if (l_ok) {
                 self.gaze_x_sum += sample.gaze_point_2d_L_norm[0];
                 self.gaze_y_sum += sample.gaze_point_2d_L_norm[1];
@@ -146,6 +288,28 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
     /// result; only exhausting all retries fails the run.
     pub fn finalizePoint(self: *Calibrator) PointOutcome {
         const idx = self.current_point;
+        const n = @as(f64, @floatFromInt(self.valid_count));
+        const loss_rate = 1.0 - n / @as(f64, @floatFromInt(@max(self.sample_count, 1)));
+
+        // BATCH_4: if eye_loss_rate > 30% on corner points 1-4 (not center), RETRY.
+        // Corner points are indices 1-4 (TL, TR, BL, BR). Center is index 0.
+        const is_corner = idx >= 1 and idx <= 4;
+        if (is_corner and loss_rate > 0.30) {
+            self.retries += 1;
+            if (self.retries >= MAX_POINT_RETRIES) {
+                log.err("point {d}: eye_loss_rate {d:.1}%% >30%% — still failing after {d} attempts, aborting", .{
+                idx, loss_rate * 100.0, MAX_POINT_RETRIES,
+            });
+            self.state = .error_state;
+            return .failed;
+        }
+        log.warn("point {d}: eye_loss_rate {d:.1}%% >30%% — retry {d}/{d}", .{
+                idx, loss_rate, self.retries + 1, MAX_POINT_RETRIES,
+            });
+            self.state = .showing_point;
+            return .retry;
+        }
+
         if (self.valid_count < MIN_VALID_PER_POINT) {
             self.retries += 1;
             if (self.retries >= MAX_POINT_RETRIES) {
@@ -161,10 +325,17 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
             self.state = .showing_point;
             return .retry;
         }
-        const n = @as(f64, @floatFromInt(self.valid_count));
         self.result_gaze[idx] = .{ self.gaze_x_sum / n, self.gaze_y_sum / n };
         self.result_eye[idx] = .{ self.eye_x_sum / n, self.eye_y_sum / n, self.eye_z_sum / n };
         self.retries = 0;
+        // v0.3 BATCH_1: per-point calibration quality log (additive, log-only).
+        // eye_loss_rate = 1 - valid/sample (corner points that clip out of the
+        // track box); avg_jaw_diff = mean |L_y-R_y| over both-valid frames
+        // (jaw/cheek wobble). Data for BATCH_4 jaw-filter thresholds.
+        const avg_jaw = if (self.jaw_diff_cnt > 0) self.jaw_diff_sum / @as(f64, @floatFromInt(self.jaw_diff_cnt)) else 0.0;
+        log.info("point {d}: cal quality valid={d}/{d} eye_loss_rate={d:.3} avg_jaw_diff={d:.4}", .{
+            idx, self.valid_count, self.sample_count, loss_rate, avg_jaw,
+        });
         log.info("point {d}: gaze=({d:.3},{d:.3}) eye=({d:.1},{d:.1},{d:.1}) [{d}/{d} valid]", .{
             idx, self.result_gaze[idx][0], self.result_gaze[idx][1],
             self.result_eye[idx][0], self.result_eye[idx][1], self.result_eye[idx][2],

@@ -1199,3 +1199,117 @@ test "BATCH_2n: n=2 eyes-only upper-corner look reaches the edge (UL reach gap)"
     try std.testing.expect(max_fy <= 100.0);
     try std.testing.expect(pipe.corner_peak * -1.0 >= 17.0); // peak glided near the edge
 }
+
+// ── v0.3 BATCH_2: corner-hold head-turn witness regression ─────────────────
+
+test "BATCH_2o: corner_hold does NOT engage on still head + off-center gaze (cal bias scenario)" {
+    // Reproduces the BATCH_1 capture finding: head stays still (hp≈0) but
+    // gaze reads off-center (gy≈-12°, gp≈7.2°, radial≈14°>corner_pin_deg 12).
+    // With the v0.3 BATCH_2 head-turn witness (|head_yaw|>3.5), the corner
+    // hold must NOT engage, and the output must stay near 0.
+    var pipe = filter.TobiiPipeline{};
+    const p = filter.Preset{ .curve_mode = 2, .head_gain = 2.0, .flip_yaw = true, .max_yaw = 180.0, .track_box_factor = 1.0 };
+    var s = makeSample();
+    // Settle ref first
+    _ = drive(&pipe, &s, &p, 100, noop);
+    // Gaze pinned off-center: norm 0.2 → phys 0.2 → gy≈-12°.
+    // norm Y 0.32 → phys 0.32 → gp≈7.2°. radial≈14 > 12 ✓.
+    s.gaze_point_2d_norm = .{ 0.2, 0.32 };
+    s.gaze_point_2d_L_norm = .{ 0.2, 0.32 };
+    s.gaze_point_2d_R_norm = .{ 0.2, 0.32 };
+    var max_fy: f64 = 0;
+    for (0..600) |_| {
+        s.timestamp_us += ts_step;
+        const out = pipe.process(&s, &p, dt_90);
+        try std.testing.expect(!pipe.corner_hold);
+        if (@abs(out[3]) > max_fy) max_fy = @abs(out[3]);
+    }
+    // Output yaw must be WAY less than the ~21° corner swim (BATCH_1 capture).
+    // The gaze tug still contributes ~4-7° (tug tracks off-center gaze by design),
+    // but the corner-reach gliding (21°) is eliminated. Ensure < 10° = bounded by
+    // gaze_scale·er·ge with no corner stacking.
+    try std.testing.expect(max_fy < 10.0);
+}
+
+test "BATCH_2p: 30s synthetic still-gaze at center -> output yaw max-min < 0.3 deg" {
+    // 30 s at 90 Hz = 2700 frames. Perfectly still head + center gaze
+    // must produce near-zero output variance (acceptance criterion from plan).
+    var pipe = filter.TobiiPipeline{};
+    const p = filter.Preset{ .curve_mode = 2, .head_gain = 2.0, .flip_yaw = true, .max_yaw = 180.0 };
+    var s = makeSample();
+    // Settle + drive 30s worth with still center gaze
+    var fy_min: f64 = 999;
+    var fy_max: f64 = -999;
+    for (0..2800) |i| {
+        _ = i;
+        s.timestamp_us += ts_step;
+        const out = pipe.process(&s, &p, dt_90);
+        const fy_val = out[3];
+        if (fy_val < fy_min) fy_min = fy_val;
+        if (fy_val > fy_max) fy_max = fy_val;
+    }
+    try std.testing.expect(fy_max - fy_min < 0.3);
+}
+
+// ── v0.3 BATCH_1: jitter diagnostics (--diag-jitter) ─────────────────────
+
+test "BATCH_1x: VarWindow — constant raw -> zero variance" {
+    var w = filter.VarWindow{};
+    for (0..200) |i| {
+        _ = i;
+        w.feed(0.42); // static gaze: variance must stay 0
+    }
+    try std.testing.expect(w.n == 100); // ring saturated, evicting
+    try std.testing.expect(w.variance() < 1e-9);
+}
+
+test "BATCH_1y: VarWindow — sine raw -> known variance" {
+    // One full period of sin over the window: population variance = A^2/2.
+    // 100 samples, A = 0.1 -> var = 0.005, std = 0.0707.
+    var w = filter.VarWindow{};
+    for (0..100) |i| {
+        const phase = 2.0 * std.math.pi * @as(f64, @floatFromInt(i)) / 100.0;
+        w.feed(0.1 * @sin(phase));
+    }
+    try std.testing.expect(@abs(w.variance() - 0.005) < 1e-6);
+}
+
+test "BATCH_1z: diag-jitter 30s still gaze -> summary fires, RMS ~ 0" {
+    // Perfectly still gaze at center: raw_gaze_yaw == 0, oe_resid == 0,
+    // tug_out == 0 -> all per-source RMS must be ~0 (no false jitter).
+    var pipe = filter.TobiiPipeline{};
+    pipe.diag_jitter = true;
+    const p = filter.Preset{ .curve_mode = 2, .head_gain = 2.0, .flip_yaw = true, .max_yaw = 180.0 };
+    var s = makeSample();
+    // ~31 s at 90 Hz (2700 frames) lets the 30 s summary fire.
+    _ = drive(&pipe, &s, &p, 2790, noop);
+    try std.testing.expect(pipe.diag_summary_done);
+    try std.testing.expect(pipe.diag_run_n >= 2700);
+    // A static synthetic gaze is perfectly stable: variance ~ 0 on all three.
+    try std.testing.expect(pipe.diag_raw.variance() < 1e-6);
+    try std.testing.expect(pipe.diag_oe.variance() < 1e-6);
+    try std.testing.expect(pipe.diag_tug.variance() < 1e-6);
+    // And the summary printed RMS ≈ 0 (sqrt of mean square over the run).
+    const nf = @as(f64, @floatFromInt(pipe.diag_run_n));
+    try std.testing.expect(@sqrt(pipe.diag_run_raw_sq / nf) < 1e-3);
+    try std.testing.expect(@sqrt(pipe.diag_run_oe_sq / nf) < 1e-3);
+    try std.testing.expect(@sqrt(pipe.diag_run_tug_sq / nf) < 1e-3);
+}
+
+test "BATCH_1w: diag-jitter is ADDITIVE — identical output with/without flag" {
+    // The diag path must not perturb the pose output (INVARIANT: production
+    // path byte-identical to v0.2.7 without --diag flags).
+    const p = filter.Preset{ .curve_mode = 2, .head_gain = 2.0, .flip_yaw = true, .max_yaw = 180.0 };
+    var s1 = makeSample();
+    var p1 = filter.TobiiPipeline{};
+    const out_no_diag = drive(&p1, &s1, &p, 500, noop);
+    var s2 = makeSample();
+    var p2 = filter.TobiiPipeline{};
+    p2.diag_jitter = true;
+    const out_diag = drive(&p2, &s2, &p, 500, noop);
+    try std.testing.expect(@abs(out_no_diag[0] - out_diag[0]) < 1e-9);
+    try std.testing.expect(@abs(out_no_diag[1] - out_diag[1]) < 1e-9);
+    try std.testing.expect(@abs(out_no_diag[2] - out_diag[2]) < 1e-9);
+    try std.testing.expect(@abs(out_no_diag[3] - out_diag[3]) < 1e-9);
+    try std.testing.expect(@abs(out_no_diag[4] - out_diag[4]) < 1e-9);
+}

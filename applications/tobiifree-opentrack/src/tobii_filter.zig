@@ -580,6 +580,38 @@ pub const RotationSmoother = struct {
     }
 };
 
+/// v0.3 BATCH_1: 100-frame sliding-window variance (population variance with
+/// O(1) eviction via sum/sum-of-squares). Drives the --diag-jitter fields
+/// (raw_yaw_var_100w, oe_residual, tug_vs_raw) and the 30 s RMS summary.
+pub const VarWindow = struct {
+    buf: [100]f64 = undefined,
+    head: u32 = 0,
+    n: u32 = 0,
+    sum: f64 = 0,
+    sq: f64 = 0,
+
+    pub fn feed(self: *VarWindow, v: f64) void {
+        if (self.n == 100) {
+            const old = self.buf[self.head];
+            self.sum -= old;
+            self.sq -= old * old;
+        } else {
+            self.n += 1;
+        }
+        self.buf[self.head] = v;
+        self.sum += v;
+        self.sq += v * v;
+        self.head = (self.head + 1) % 100;
+    }
+
+    pub fn variance(self: *const VarWindow) f64 {
+        if (self.n < 2) return 0;
+        const mean = self.sum / @as(f64, @floatFromInt(self.n));
+        const v = self.sq / @as(f64, @floatFromInt(self.n)) - mean * mean;
+        return @max(v, 0.0);
+    }
+};
+
 pub const TobiiPipeline = struct {
     gaze: GazeStateFilter = .{},
     rot_yaw: RotationSmoother = .{},
@@ -789,9 +821,28 @@ ref_set: bool = false,
     has_n1_pitch_anchor: bool = false,
     n1_gaze_dwell: f64 = 0,
 
+    // v0.3 BATCH_1: jitter diagnostics state (--diag-jitter). ADDITIVE ONLY —
+    // production behavior is byte-identical to v0.2.7 unless enabled.
+    diag_jitter: bool = false, // --diag-jitter: 30s at-rest jitter summary
+    diag_corners: bool = false, // --diag-corners: structured corner trace when |gaze_yaw| > 10
+    diag_raw: VarWindow = .{}, // raw device gaze yaw (pre-EWMA filter) variance
+    diag_oe: VarWindow = .{}, // One-Euro residual = smoothed-raw (yaw path)
+    diag_tug: VarWindow = .{}, // tug-vs-raw deviation (tug path adds jitter?)
+    // full-run accumulators (Welford-style sumsq) for the 30 s RMS summary
+    diag_run_n: u64 = 0,
+    diag_run_raw_sq: f64 = 0,
+    diag_run_oe_sq: f64 = 0,
+    diag_run_tug_sq: f64 = 0,
+    diag_elapsed: f64 = 0, // seconds of diag feed (gated by valid frames)
+    diag_summary_done: bool = false,
+    diag_last_pitch_rate: f64 = 0, // smoothed pitch rate (deg/s) for the trace
+    diag_prev_fp: f64 = 0, // previous frame's smoothed head pitch (for rate)
+    diag_has_prev_fp: bool = false,
+
     const settle_target: u32 = 90; // ~1 s of samples to average the ref
     const half_ipd_mm: f64 = 32.5; // average eye-to-head-center offset
     const corner_pin_deg: f64 = 12.0; // |gaze yaw| beyond this = pinned at the screen edge
+    const corner_head_min_deg: f64 = 3.5; // v0.3 BATCH_2: minimum |head_yaw| before the corner hold can engage. Prevents the cal-bias center-stare (gy≈-12°, hp≈0°) from tripping the gaze-pinned gate and gliding the output ~21° via the n=2 corner REACH. Genuine corner looks have |hp| ≥ 7°. 3.5° discriminates center-stare (|hp|≈0.5°) from a genuine head turn.
     const corner_hyst_deg: f64 = 0.5; // estimate must sag this far below the peak to engage
     // v4.2: the hold releases when the center translation returns toward the
     // ref by this many mm from the engage position (a real head-back, not
@@ -1780,12 +1831,31 @@ ref_set: bool = false,
                 false,
             );
             if (!self.corner_hold or self.corner_side != gaze_side) {
-                self.corner_hold = true;
-                self.corner_side = gaze_side;
-                self.corner_peak = std.math.clamp(yaw, -hold_edge_in, hold_edge_in);
-                self.corner_hold_cenx = center[0];
-                self.corner_pin_active = false;
-                self.corner_held_yaw = 0;
+                // v0.3 BATCH_2: head-turn witness — prevent the corner
+                // machinery from engaging on a still head. A center-stare
+                // with cal bias (gy ≈ -12° on the real rig, hp ≈ 0°) trips
+                // the gaze_pinned radial gate and triggers the n=2 corner
+                // REACH, gliding the output ~21° mid-hold (the "looking at
+                // a spot, view swims" complaint). Genuine corner looks have
+                // |head_yaw| ≥ 7°. The 3.5° margin discriminates center-
+                // stare (|hp|≈0.5°) from a genuine head turn.
+                //   n=2: use the live interocular head_yaw.
+                //   n=1: head_yaw is frozen (last_good_yaw may be 0° after
+                //   passing through center). Use the one-eye translation
+                //   estimate (n1_last_turn_est) which persists the head-turn
+                //   angle from the n=1 drift onset.
+                const head_turned = if (self.n_eff == 2)
+                    @abs(head_yaw) > corner_head_min_deg
+                else
+                    @abs(self.n1_last_turn_est) > corner_head_min_deg;
+                if (head_turned) {
+                    self.corner_hold = true;
+                    self.corner_side = gaze_side;
+                    self.corner_peak = std.math.clamp(yaw, -hold_edge_in, hold_edge_in);
+                    self.corner_hold_cenx = center[0];
+                    self.corner_pin_active = false;
+                    self.corner_held_yaw = 0;
+                }
             } else if (yaw * gaze_side > self.corner_peak * gaze_side) {
                 self.corner_peak = std.math.clamp(yaw, -hold_edge_in, hold_edge_in); // turning deeper — track the new peak
             }
@@ -1801,7 +1871,7 @@ ref_set: bool = false,
             // creep). The pin below then holds yaw at the extended peak: the
             // view glides to the edge and stops (a held corner gaze is stable,
             // so the target stops moving — no creep).
-            if (self.n_eff == 2) {
+            if (self.corner_hold and self.n_eff == 2) {
                 const ext_out = @abs(gaze_yaw) * n1_gaze_gain * p.head_gain;
                 const reach_target = std.math.clamp(self.corner_peak + gaze_side * ext_out, -hold_edge_in, hold_edge_in);
                 if ((reach_target - self.corner_peak) * gaze_side > 0) {
@@ -1816,7 +1886,7 @@ ref_set: bool = false,
             // yanked to the (capped) peak — the view simply follows the live
             // signal there. corner_pin_active records whether the output is
             // actually pinned, so the release ease starts from the right value.
-            if (yaw * gaze_side > 0 and (yaw - self.corner_peak) * gaze_side < -corner_hyst_deg) {
+            if (self.corner_hold and yaw * gaze_side > 0 and (yaw - self.corner_peak) * gaze_side < -corner_hyst_deg) {
                 yaw = self.corner_peak; // estimate sagging — hold the peak
                 self.corner_pin_active = true;
             } else {
@@ -2052,7 +2122,7 @@ ref_set: bool = false,
         const fy = fy_head + tug_out;
         const fp = fp_head + tug_pitch * effective_eye_ratio * gate_eff;
 
-        if (std.posix.getenv("TOBII_TRACE") != null) {
+        if (std.posix.getenv("TOBII_TRACE") != null or self.diag_jitter or self.diag_corners) {
             var buf2: [96]u8 = undefined;
             const both = if (sample.validity_L == 0 and sample.validity_R == 0) blk: {
                 const ex = sample.eye_origin_R_mm[0] - sample.eye_origin_L_mm[0];
@@ -2060,11 +2130,59 @@ ref_set: bool = false,
                 const ez = sample.eye_origin_R_mm[2] - sample.eye_origin_L_mm[2];
                 break :blk std.fmt.bufPrint(&buf2, "ex={d:.1} ey={d:.1} ez={d:.1} roll={d:.2}", .{ ex, ey, ez, roll }) catch "";
             } else "";
+            // v0.3 BATCH_1: per-frame jitter diag feed (additive). raw = device
+            // gaze yaw BEFORE the EWMA gaze filter (H1 device noise floor);
+            // oe = fy_head - head_yaw = One-Euro residual on the ROTATION path
+            // (H2: what the smoother still passes); tug = fy - fy_head = the
+            // gaze-tug contribution after tug smoothing (H3: tug-path jitter).
+            if (self.diag_jitter) {
+                const raw_gaze_yaw = (g_corr[0] - 0.5) * p.gaze_scale;
+                const oe_resid = fy_head - head_yaw;
+                // tug_out already in scope (clamped tug contribution) = fy - fy_head.
+                self.diag_raw.feed(raw_gaze_yaw);
+                self.diag_oe.feed(oe_resid);
+                self.diag_tug.feed(tug_out);
+                self.diag_run_n += 1;
+                self.diag_run_raw_sq += raw_gaze_yaw * raw_gaze_yaw;
+                self.diag_run_oe_sq += oe_resid * oe_resid;
+                self.diag_run_tug_sq += tug_out * tug_out;
+                self.diag_elapsed += dt;
+                // 30 s at-rest summary: RMS of each source (sqrt of mean square).
+                // GATE (BATCH_1): the dominant source (>2x the others) is the
+                // unambiguous fix target for BATCH_2. Printed once.
+                if (!self.diag_summary_done and self.diag_elapsed >= 30.0) {
+                    self.diag_summary_done = true;
+                    const nf = @as(f64, @floatFromInt(self.diag_run_n));
+                    std.debug.print("DIAG_JITTER_SUMMARY raw_noise_rms={d:.4} oe_residual_rms={d:.4} tug_deviation_rms={d:.4} frames={d}\n", .{
+                        @sqrt(self.diag_run_raw_sq / nf),
+                        @sqrt(self.diag_run_oe_sq / nf),
+                        @sqrt(self.diag_run_tug_sq / nf),
+                        self.diag_run_n,
+                    });
+                }
+            }
+            // v0.3 BATCH_1: pitch rate (deg/s) for the corner trace — one-pole
+            // smoothed derivative of fp_head.
+            const fp_rate: f64 = if (self.diag_has_prev_fp) (@abs(fp_head - self.diag_prev_fp) / dt) else 0.0;
+            self.diag_last_pitch_rate += 0.1 * (fp_rate - self.diag_last_pitch_rate);
+            self.diag_prev_fp = fp_head;
+            self.diag_has_prev_fp = true;
             std.debug.print("hp={d:.2} gy={d:.2} rw={d:.2} hpd={d:.2} gpd={d:.2} rp={d:.2} yaw={d:.2} pitch={d:.2} {s} fy={d:.2} fp={d:.2} er={d:.2} cen=({d:.1},{d:.1},{d:.1}) ref=({d:.1},{d:.1},{d:.1}) yref={d:.2} rref={d:.2} fb={d:.2} gt={d:.2} ge={d:.2} ch={d} n={d} lg={d:.2} fc={d:.2} fya={d} fyp={d} mode={s} cp={d:.2} chy={d:.2}\n", .{
                 head_yaw, gaze_yaw, fy_head, head_pitch, gaze_pitch, fp_head, yaw, pitch, both, fy, fp, effective_eye_ratio,
                 center[0], center[1], center[2], self.ref_mid[0], self.ref_mid[1], self.ref_mid[2], self.yaw_ref, self.roll_ref, if (rot_both) @as(f64, 0.0) else @as(f64, 1.0), gate, gate_eff, @intFromBool(self.corner_hold), n, self.last_good_yaw,
                 self.rot_yaw.cutoff(), @intFromBool(p.flip_yaw), @intFromBool(p.flip_pitch), smoothModeName(mode),
                 self.corner_peak, self.corner_held_yaw,
+            });
+            // v0.3 BATCH_1: second line — validity/plausibility/n_eff/jaw/drift/
+            // timer/pitch-rate + the three jitter window variances (BATCH_3+
+            // data needs). Split from the main trace to stay under the 32-arg
+            // fmt limit and keep the legacy line byte-identical.
+            const jd = @abs(sample.gaze_point_2d_L_norm[1] - sample.gaze_point_2d_R_norm[1]);
+            const n1_drift = if (self.has_n1_anchor) self.last_good_yaw - self.n1_anchor_yaw else 0.0;
+            std.debug.print("  vl={d} vr={d} pl={d} pr={d} ne={d} jd={d:.3} nd={d:.2} nt={d:.2} pr={d:.2} rv={d:.4} ov={d:.4} tv={d:.4}\n", .{
+                sample.validity_L, sample.validity_R, @intFromBool(l_plaus), @intFromBool(r_plaus), self.n_eff, jd, n1_drift, self.n1_timer,
+                self.diag_last_pitch_rate,
+                self.diag_raw.variance(), self.diag_oe.variance(), self.diag_tug.variance(),
             });
         }
 

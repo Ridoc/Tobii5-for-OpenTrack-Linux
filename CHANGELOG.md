@@ -4,6 +4,18 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [v0.3.1-rc.1] — 2026-09-19 (calibration fit correction + UX, RC)
+
+### Added
+- **Accuracy diagnostic module** (`accuracy_diag.zig`): extracted 39-target heatmap + progress ring into standalone reusable module (ready for BATCH_1–3 calibration fit work). The `--accuracy` flag and wizard integration unchanged.
+- **CHANGELOG.md entry for this RC.**
+
+### Changed
+- `calibration.zig`: removed accuracy-specific constants/types (`ACCURACY_COLS`, `AccTarget`, `accTarget()`, `AccPointResult`) — now imported from `accuracy_diag.zig`.
+- `main.zig`: accuracy drawing branches (`calDrawFunc` `.accuracy_check` / `.show_accuracy_results`) delegate to `accuracy_diag.drawAccuracyCheck` / `drawAccuracyResults`.
+- `build.zig`: registers `accuracy_diag` module, links gtk4 in test target for cairo draw functions.
+- Bridge tests still 29/29 pass.
+
 ## [v0.2.7] — 2026-08-30 (corner stability + range rework)
 
 Corner-tracking stability and range recovery (plan v0.2.7: BATCH_1 done +

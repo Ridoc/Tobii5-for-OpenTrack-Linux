@@ -22,6 +22,7 @@ const proto = @import("daemon_protocol");
 const SocketSource = @import("socket_source").SocketSource;
 const tobii = @import("tobii_filter");
 const calibration = @import("calibration");
+const accuracy_diag = @import("accuracy_diag");
 const da_config = @import("display_area_config");
 
 const log = std.log.scoped(.opentrack);
@@ -69,6 +70,7 @@ var g_track_box_factor: f64 = 2.5;
 // overlaid onto whichever preset becomes active (see applyCalFit).
 var g_cal_fit: calibration.AffineFit = .{};
 var g_cli_gaze_override: bool = false; // explicit --gaze-* flags beat the fit
+var g_do_accuracy: bool = false; // BATCH_4: --accuracy flag triggers post-wizard accuracy check
 
 fn calFitPath(buf: *[512]u8) ?[]const u8 {
     if (std.posix.getenv("XDG_CONFIG_HOME")) |x| {
@@ -974,12 +976,35 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     const cur_pt = g_calibrator.current_point + 1;
     const retries = g_calibrator.retries;
     const pt = g_calibrator.currentPoint();
+    // BATCH_4: accuracy state snapshot.
+    const acc_idx = g_calibrator.acc_target_idx;
+    const acc_results = g_calibrator.acc_results;
+    const acc_edge = g_calibrator.acc_edge_err;
+    const acc_mid = g_calibrator.acc_mid_err;
+    const acc_center = g_calibrator.acc_center_err;
     g_cal_mutex.unlock();
 
     // Dark background.
     c.cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
     c.cairo_paint(cr);
 
+    // ── BATCH_4: Accuracy check / results → delegated to accuracy_diag ──
+    if (st == .accuracy_check) {
+        const w_f = @as(f64, @floatFromInt(width));
+        const h_f = @as(f64, @floatFromInt(height));
+        accuracy_diag.drawAccuracyCheck(cr, w_f, h_f, acc_idx, accuracy_diag.accTarget(acc_idx), cap_n);
+        return;
+    }
+
+    // ── BATCH_4: Accuracy results heatmap (delegated) ─────────────────
+    if (st == .show_accuracy_results) {
+        const w_f = @as(f64, @floatFromInt(width));
+        const h_f = @as(f64, @floatFromInt(height));
+        accuracy_diag.drawAccuracyResults(cr, w_f, h_f, acc_results[0..], acc_center, acc_mid, acc_edge);
+        return;
+    }
+
+    // ── Original wizard drawing ──────────────────────────────────────
     const dot_r: f64 = 12;
 
     // Map normalized [0,1] to pixel coords.
@@ -1167,6 +1192,8 @@ fn calAbortTimeout(_: ?*anyopaque) callconv(.c) c_int {
 fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_uint, _: ?*anyopaque) callconv(.c) c_int {
     const GDK_KEY_space: c_uint = 0x020; // XK_space
     const GDK_KEY_Escape: c_uint = 0xff1b;
+    const GDK_KEY_r: c_uint = 0x072; // XK_r
+    const GDK_KEY_R: c_uint = 0x052; // XK_R
 
     if (keyval == GDK_KEY_Escape) {
         g_cal_mutex.lock();
@@ -1174,6 +1201,18 @@ fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_ui
         g_cal_mutex.unlock();
         closeCalWindow(); // already on the GTK main thread here
         return 1; // handled
+    }
+
+    // BATCH_4: in .show_accuracy_results, press R to re-run wizard.
+    if (keyval == GDK_KEY_r or keyval == GDK_KEY_R) {
+        g_cal_mutex.lock();
+        if (g_calibrator.state == .show_accuracy_results) {
+            g_calibrator.start();
+            g_cal_mutex.unlock();
+            if (g_cal_da) |da| c.gtk_widget_queue_draw(@ptrCast(da));
+            return 1;
+        }
+        g_cal_mutex.unlock();
     }
 
     if (keyval == GDK_KEY_space) {
@@ -1189,23 +1228,48 @@ fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_ui
     return 0; // not handled
 }
 
-/// Stream-thread side: feed samples into the wizard. Never touches GTK here —
-/// redraws are driven by onTick on the main thread.
+/// Stream-thread side: feed samples into the wizard OR accuracy check.
+/// Never touches GTK here — redraws are driven by onTick on the main thread.
 fn calFeedGaze(sample: *const proto.GazeSample) void {
     g_cal_mutex.lock();
-    const done = g_calibrator.feedSample(sample);
-    var outcome: ?calibration.Calibrator.PointOutcome = null;
-    if (done) outcome = g_calibrator.finalizePoint();
-    g_cal_mutex.unlock();
+    if (g_calibrator.state == .accuracy_check) {
+        const acc_done = g_calibrator.feedAccuracy(sample);
+        var acc_more: ?bool = null;
+        if (acc_done) acc_more = g_calibrator.finalizeAccTarget();
+        g_cal_mutex.unlock();
 
-    switch (outcome orelse return) {
-        .next_point => {},
-        .retry => {}, // same dot stays up; hint drawn from state snapshot
-        .finished => sendCalibrationToDaemon(), // socket + file IO only
-        .failed => {
-            // Show the abort message for 3 seconds before closing.
-            _ = c.g_timeout_add(3000, @ptrCast(&calAbortTimeout), null);
-        },
+        if (acc_more) |more| {
+            if (!more) {
+                // All targets done — transition to results display.
+                g_cal_mutex.lock();
+                g_calibrator.state = .show_accuracy_results;
+                g_cal_mutex.unlock();
+            }
+            // Queue a redraw on the main thread.
+            if (g_cal_da != null) {
+                _ = c.g_timeout_add(1, struct {
+                    fn cb(_: ?*anyopaque) callconv(.c) c_int {
+                        c.gtk_widget_queue_draw(@ptrCast(g_cal_da orelse return 0));
+                        return 0;
+                    }
+                }.cb, null);
+            }
+        }
+    } else {
+        const done = g_calibrator.feedSample(sample);
+        var outcome: ?calibration.Calibrator.PointOutcome = null;
+        if (done) outcome = g_calibrator.finalizePoint();
+        g_cal_mutex.unlock();
+
+        switch (outcome orelse return) {
+            .next_point => {},
+            .retry => {}, // same dot stays up; hint drawn from state snapshot
+            .finished => sendCalibrationToDaemon(), // socket + file IO only
+            .failed => {
+                // Show the abort message for 3 seconds before closing.
+                _ = c.g_timeout_add(3000, @ptrCast(&calAbortTimeout), null);
+            },
+        }
     }
 }
 
@@ -1608,6 +1672,21 @@ fn activate(_: *c.GtkApplication, _: ?*anyopaque) callconv(.c) void {
     syncSliders();
 
     _ = c.g_timeout_add(8, @ptrCast(&onTick), null); // 125 Hz poll, ~30 Hz label refresh
+
+    // BATCH_4: --accuracy opens the accuracy check right after startup.
+    if (g_do_accuracy) {
+        _ = c.g_timeout_add(500, struct {
+            fn start(_: ?*anyopaque) callconv(.c) c_int {
+                if (g_cal_window != null) return 1;
+                g_calibrator.startAccuracy(
+                    if (g_physical_screen) |ps| ps.w_mm else 800.0,
+                    if (g_physical_screen) |ps| ps.h_mm else 330.0,
+                );
+                openCalWindow();
+                return 0;
+            }
+        }.start, null);
+    }
 }
 
 // ─── CLI / lifecycle ─────────────────────────────────────────────────
@@ -1646,6 +1725,8 @@ fn usage() void {
         \\  --flip-pitch         invert head pitch direction
         \\  --no-position        send zeros for head position
         \\  --headless           no GUI window, console logging only
+        \\  --diag-jitter        30s at-rest jitter diagnostic: per-source RMS summary (raw device / One-Euro residual / tug path)
+        \\  --diag-corners       structured corner trace (fields: validity/plaus/n_eff/jaw_diff/n1_drift/n1_timer/pitch_rate) when |gaze_yaw|>10
         \\  -v, --verbose        verbose per-sample logging
         \\  -h, --help           show this help
         \\
@@ -1817,6 +1898,12 @@ fn parseArgs() void {
             g_opts.p.send_position = false;
         } else if (std.mem.eql(u8, arg, "--headless")) {
             g_opts.headless = true;
+        } else if (std.mem.eql(u8, arg, "--diag-jitter")) {
+            g_pipeline.diag_jitter = true;
+        } else if (std.mem.eql(u8, arg, "--diag-corners")) {
+            g_pipeline.diag_corners = true;
+        } else if (std.mem.eql(u8, arg, "--accuracy")) {
+            g_do_accuracy = true;
         } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
             g_opts.verbose = true;
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {

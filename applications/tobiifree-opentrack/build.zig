@@ -101,7 +101,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Calibration wizard state machine.
+    // Accuracy diagnostic module (types + cairo drawing for 39-target heatmap).
+    const accuracy_diag = b.createModule(.{
+        .root_source_file = b.path("src/accuracy_diag.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Calibration wizard state machine. Imports accuracy_diag for types.
     const calibration = b.createModule(.{
         .root_source_file = b.path("src/calibration.zig"),
         .target = target,
@@ -109,6 +116,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "daemon_protocol", .module = daemon_protocol },
             .{ .name = "tobiifree_core", .module = tobiifree_core },
+            .{ .name = "accuracy_diag", .module = accuracy_diag },
         },
     });
 
@@ -125,6 +133,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "tobii_filter", .module = tobii_filter },
                 .{ .name = "display_area_config", .module = display_area_config },
                 .{ .name = "calibration", .module = calibration },
+                .{ .name = "accuracy_diag", .module = accuracy_diag },
             },
         }),
     });
@@ -154,6 +163,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    tests.linkSystemLibrary("gtk4");
+    tests.linkLibC();
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run bridge unit tests");
     test_step.dependOn(&run_tests.step);
