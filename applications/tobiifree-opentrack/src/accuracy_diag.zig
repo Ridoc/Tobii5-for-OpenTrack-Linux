@@ -87,7 +87,7 @@ pub fn drawAccuracyCheck(
     const py = target.y * h;
 
     // White target dot.
-    const dot_r: f64 = 12;
+    const dot_r: f64 = 5;
     c.cairo_set_source_rgb(cr, 1, 1, 1);
     c.cairo_arc(cr, px, py, dot_r, 0, 2.0 * 3.14159265);
     c.cairo_fill(cr);

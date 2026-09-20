@@ -961,6 +961,7 @@ fn openCalWindow() void {
     // is not focusable by default, so it would never receive key events.
     const key_ctrl = c.gtk_event_controller_key_new();
     _ = c.g_signal_connect_data(@ptrCast(key_ctrl), "key-pressed", @ptrCast(&calKeyPressed), null, null, 0);
+    _ = c.g_signal_connect_data(@ptrCast(key_ctrl), "key-released", @ptrCast(&calKeyReleased), null, null, 0);
     c.gtk_widget_add_controller(@ptrCast(win), @ptrCast(key_ctrl));
 
     c.gtk_window_present(@ptrCast(win));
@@ -1005,7 +1006,7 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     }
 
     // ── Original wizard drawing ──────────────────────────────────────
-    const dot_r: f64 = 12;
+    const dot_r: f64 = 5;
 
     // Map normalized [0,1] to pixel coords.
     const px = pt.x * @as(f64, @floatFromInt(width));
@@ -1018,7 +1019,8 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
 
     // Green progress ring around the dot during capturing.
     if (st == .capturing) {
-        const sweep = 2.0 * 3.14159265 * (@as(f64, @floatFromInt(cap_n)) / @as(f64, @floatFromInt(calibration.SAMPLES_PER_POINT)));
+        const cap_target = calibration.samplesForPoint(cur_pt - 1);
+        const sweep = 2.0 * 3.14159265 * (@as(f64, @floatFromInt(cap_n)) / @as(f64, @floatFromInt(cap_target)));
         c.cairo_set_source_rgb(cr, 0.2, 1.0, 0.4);
         c.cairo_set_line_width(cr, 4);
         c.cairo_arc(cr, px, py, dot_r + 6, -3.14159265 * 0.5, -3.14159265 * 0.5 + sweep);
@@ -1048,6 +1050,15 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     } else |_| {}
     // "press SPACE" centered directly below the dot.
     if (st == .showing_point) {
+        // BATCH_2: point label shown above the dot as instruction.
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 24);
+        var plabel_ext: c.cairo_text_extents_t = undefined;
+        calMeasureText(cr, pt.label, &plabel_ext);
+        c.cairo_move_to(cr, (w_f - plabel_ext.width) / 2.0, py - 40);
+        c.cairo_set_source_rgb(cr, 1.0, 0.85, 0.1);
+        calShowText(cr, pt.label);
+
         c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
         c.cairo_set_font_size(cr, 26);
         var ext: c.cairo_text_extents_t = undefined;
@@ -1058,9 +1069,10 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     }
     // Small capturing counter below the dot (slot free during .capturing).
     if (st == .capturing) {
+        const cap_target = calibration.samplesForPoint(cur_pt - 1);
         var cap_buf: [48]u8 = undefined;
         if (std.fmt.bufPrint(&cap_buf, "{d}/{}", .{
-            cap_n, calibration.SAMPLES_PER_POINT,
+            cap_n, cap_target,
         })) |cap| {
             c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
             c.cairo_set_font_size(cr, 14);
@@ -1228,6 +1240,19 @@ fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_ui
     return 0; // not handled
 }
 
+// BATCH_3: HOLD-SPACE release — if user was holding SPACE during capture,
+// signal the stream thread to finalize the current point early.
+fn calKeyReleased(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_uint, _: ?*anyopaque) callconv(.c) c_int {
+    const GDK_KEY_space: c_uint = 0x020;
+    if (keyval != GDK_KEY_space) return 0;
+    g_cal_mutex.lock();
+    if (g_calibrator.state == .capturing) {
+        g_calibrator.hold_released = true;
+    }
+    g_cal_mutex.unlock();
+    return 1;
+}
+
 /// Stream-thread side: feed samples into the wizard OR accuracy check.
 /// Never touches GTK here — redraws are driven by onTick on the main thread.
 fn calFeedGaze(sample: *const proto.GazeSample) void {
@@ -1258,7 +1283,13 @@ fn calFeedGaze(sample: *const proto.GazeSample) void {
     } else {
         const done = g_calibrator.feedSample(sample);
         var outcome: ?calibration.Calibrator.PointOutcome = null;
-        if (done) outcome = g_calibrator.finalizePoint();
+        if (done) {
+            outcome = g_calibrator.finalizePoint();
+        } else if (g_calibrator.hold_released and g_calibrator.valid_count >= calibration.MIN_VALID_PER_POINT) {
+            // BATCH_3: HOLD-SPACE released — finalize early if enough valid frames.
+            g_calibrator.hold_released = false;
+            outcome = g_calibrator.finalizePoint();
+        }
         g_cal_mutex.unlock();
 
         switch (outcome orelse return) {

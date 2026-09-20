@@ -4,6 +4,25 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [v0.3.1-rc.2] — 2026-09-19
+
+### Added
+- **9-point calibration wizard**: 4 new TRUE EDGE corner points (0.02, 0.02; 0.98, 0.02; 0.02, 0.98; 0.98, 0.98) added to the existing 5-point set (Center + 4 near-corners). True-edge points sample the device's non-linear gaze response at screen extremes.
+- **Per-point hold durations**: `samplesForPoint()` returns 180 (center ~3s), 300 (near-corners ~5s), 600 (true-corners ~10s @ 60 Hz).
+- **Settle frames between points**: 30-frame (~330 ms) settle period discards gaze-transition samples when advancing to the next calibration point.
+- **Per-eye frame tracking**: per-point left/right eye frame counts + ratio logged at finalization for single-eye corner offset analysis.
+- **Point label instructions**: instruction text shown above the dot ("look at the very corner of your monitor" for edge points).
+- **TAP/HOLD SPACE pacing** for calibration wizard + accuracy diagnostic: TAP SPACE starts a fixed-duration capture; HOLD SPACE captures while held (min 30-frame guard), released SPACE early-finalizes if enough valid frames accrued.
+
+### Changed
+- **Smaller calibration dots**: dot radius reduced from 12 px → 5 px in both the wizard (`calDrawFunc`) and the accuracy diagnostic (`drawAccuracyResults`).
+- **Unified progress UI**: progress ring sweep + capture counter now use `samplesForPoint()` per-point target instead of a fixed `SAMPLES_PER_POINT`.
+- **Eye-loss retry gate extended** to all non-center points (indices 1–8), not just the original near-corners (1–4).
+- `plan-spec-cal-fit-v0.3.1.yaml`: BATCH_0/1/2/3 marked complete; BATCH_4/5 remain deferred.
+
+### Notes
+- Fit kept **affine (linear)** — 9-point data constrains edges without pipeline formula changes. No security impact (no new file-I/O/socket/network boundaries).
+
 ## [v0.3.1-rc.1] — 2026-09-19 (calibration fit correction + UX, RC)
 
 ### Added

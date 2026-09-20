@@ -1,7 +1,7 @@
 # lessons.yaml — append-only lessons ledger (hard-won, attributed, date-stamped)
 # Indexed-docs discipline: terse; root_cause + prevention only. History in git log.
 # See .docs/index.yaml CONCEPT_ROUTES -> LESSONS
-UPDATED: "2026-09-16"
+UPDATED: "2026-09-19"
 
 LESSONS:
   - id: "2026-09-16-plan-spec-write-quirk"
@@ -31,3 +31,17 @@ LESSONS:
     prevention: "Before touching smoothing/alpha (BATCH_2), run a DATA-DERIVED baseline first (BATCH_1 --diag-jitter + 39-target --accuracy sweep) to attribute center jitter to one source (raw device noise | One-Euro residual | tug-path | calibration fit). Only then fix the dominant source — no hardcoded 0.12 thresholds."
     session: "v0-3-planning-research"
     verified: "2026-09-16"
+
+  - id: "2026-09-19-true-edge-calibration-constrains-fit"
+    domain: "calibration"
+    root_cause: "5-point calibration at near-corners (0.15/0.85) does not sample the device's non-linear response at screen extremes; affine fit extrapolates beyond its data, producing corner residual errors that a 9-point wizard with true-edge points (0.02/0.98) constrains at the actual gaze range boundary."
+    prevention: "When fitting gaze-to-display, include TRUE-EDGE stimulus points (0.02 and 0.98, not 0.15/0.85) so the fit is constrained at the physical gaze range boundary — this prevents extrapolation-induced corner error even keeping an affine pipeline formula."
+    session: "cal-fit-v0.3.1"
+    verified: "2026-09-19"
+
+  - id: "2026-09-19-single-eye-per-point-offset-tracking"
+    domain: "calibration/diagnostics"
+    root_cause: "At true-edge corners the ET5 clip mount occludes one eye (nose-side), so the fit averages over single-eye frames with a ~½ IPD lateral offset — without per-eye tracking the fit cannot account for this systematic bias at single-eye points."
+    prevention: "Track which eye(s) are valid per calibration point (left_eye_frames / right_eye_frames counters); log per-point eye_ratio; if residual maps show consistent lateral bias at single-eye corners, subtract a monocular offset (½ IPD) for those points during the fit."
+    session: "cal-fit-v0.3.1"
+    verified: "2026-09-19"

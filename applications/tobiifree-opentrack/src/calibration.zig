@@ -23,15 +23,27 @@ pub const CalPoint = struct {
 };
 
 pub const CALIBRATION_POINTS = [_]CalPoint{
-    .{ .x = 0.5, .y = 0.5, .label = "Center" },
-    .{ .x = 0.15, .y = 0.15, .label = "Top-Left" },
-    .{ .x = 0.85, .y = 0.15, .label = "Top-Right" },
-    .{ .x = 0.05, .y = 0.95, .label = "Bottom-Left" },
-    .{ .x = 0.95, .y = 0.95, .label = "Bottom-Right" },
+    .{ .x = 0.5,  .y = 0.5,  .label = "Center" },
+    // Near corners (both eyes typically visible)
+    .{ .x = 0.15, .y = 0.15, .label = "Near Top-Left" },
+    .{ .x = 0.85, .y = 0.15, .label = "Near Top-Right" },
+    .{ .x = 0.05, .y = 0.95, .label = "Near Bottom-Left" },
+    .{ .x = 0.95, .y = 0.95, .label = "Near Bottom-Right" },
+    // True edge corners (single eye, nose-occluded)
+    .{ .x = 0.02, .y = 0.02, .label = "Edge Top-Left" },
+    .{ .x = 0.98, .y = 0.02, .label = "Edge Top-Right" },
+    .{ .x = 0.02, .y = 0.98, .label = "Edge Bottom-Left" },
+    .{ .x = 0.98, .y = 0.98, .label = "Edge Bottom-Right" },
 };
 
 pub const NUM_CAL_POINTS = CALIBRATION_POINTS.len;
-pub const SAMPLES_PER_POINT = 180; // ~3 seconds at 60Hz — longer window for corner re-acquire
+
+/// Per-point capture sample counts (center ~3s, near-corners ~5s, true-corners ~10s @ 60 Hz).
+pub fn samplesForPoint(idx: usize) usize {
+    return if (idx == 0) 180
+    else if (idx >= 1 and idx <= 4) 300
+    else 600;
+}
 
 /// Capture quality gates: below this many valid frames the attempt is thrown
 /// away and the SAME point is retried (eyes often clip out of tracking range
@@ -43,6 +55,10 @@ pub const Calibrator = struct {
     state: CalState = .idle,
     current_point: usize = 0,
     sample_count: usize = 0,
+    // BATCH_2: settle frames between wizard points (discard first ~30 frames for gaze transition).
+    settle_remaining: usize = 0,
+    // BATCH_3: HOLD-SPACE release flag — set by key-release handler, checked in feed path.
+    hold_released: bool = false,
 
     // Accumulated gaze samples for current point.
     gaze_x_sum: f64 = 0,
@@ -51,6 +67,9 @@ pub const Calibrator = struct {
     eye_y_sum: f64 = 0,
     eye_z_sum: f64 = 0,
     valid_count: usize = 0,
+    // BATCH_2: per-eye frame counters (for single-eye corner offset logging).
+    left_eye_frames: usize = 0,
+    right_eye_frames: usize = 0,
     // v0.3 BATCH_1: per-point quality log accumulators (additive, log-only).
     jaw_diff_sum: f64 = 0, // |L_y - R_y| summed over BOTH-eye-valid frames
     jaw_diff_cnt: usize = 0,
@@ -103,6 +122,10 @@ pub const Calibrator = struct {
         self.valid_count = 0;
         self.jaw_diff_sum = 0;
         self.jaw_diff_cnt = 0;
+        self.left_eye_frames = 0;
+        self.right_eye_frames = 0;
+        self.settle_remaining = accuracy_diag.ACC_BRAKE_FRAMES;
+        self.hold_released = false;
     }
 
     pub fn cancel(self: *Calibrator) void {
@@ -252,9 +275,16 @@ pub const Calibrator = struct {
 
 /// Feed a gaze sample during capturing. One valid eye is enough for
 /// calibration (clip-mounted trackers frequently lose one eye at extreme
-/// angles). Returns true once SAMPLES_PER_POINT frames have arrived.
+/// angles). Returns true once the per-point sample count has been reached.
 pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
     if (self.state != .capturing) return false;
+
+    // BATCH_2: settle frames — discard initial samples for gaze transition.
+    if (self.settle_remaining > 0) {
+        self.settle_remaining -= 1;
+        self.sample_count += 1; // still count sample so total_count reflects elapsed time
+        return false;
+    }
 
     // Accept any sample where at least ONE eye is tracked (by validity flag
     // or by plausible per-eye 2D coords — fixes corner false-negatives).
@@ -264,35 +294,39 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
     const r_ok = sample.validity_R == 0 or r_plausible;
     const any_valid = l_ok or r_ok;
     if (any_valid) {
-            if (l_ok and r_ok) {
-                self.gaze_x_sum += sample.gaze_point_2d_norm[0];
-                self.gaze_y_sum += sample.gaze_point_2d_norm[1];
-                self.eye_x_sum += (sample.eye_origin_L_mm[0] + sample.eye_origin_R_mm[0]) / 2.0;
-                self.eye_y_sum += (sample.eye_origin_L_mm[1] + sample.eye_origin_R_mm[1]) / 2.0;
-                self.eye_z_sum += (sample.eye_origin_L_mm[2] + sample.eye_origin_R_mm[2]) / 2.0;
-                // v0.3 BATCH_1: jaw/cheek wobble witness — |L_y - R_y| on
-                // normalized per-eye 2D. High mean = jaw artifacts at this point.
-                self.jaw_diff_sum += @abs(sample.gaze_point_2d_L_norm[1] - sample.gaze_point_2d_R_norm[1]);
-                self.jaw_diff_cnt += 1;
-            } else if (l_ok) {
-                self.gaze_x_sum += sample.gaze_point_2d_L_norm[0];
-                self.gaze_y_sum += sample.gaze_point_2d_L_norm[1];
-                self.eye_x_sum += sample.eye_origin_L_mm[0];
-                self.eye_y_sum += sample.eye_origin_L_mm[1];
-                self.eye_z_sum += sample.eye_origin_L_mm[2];
-            } else {
-                self.gaze_x_sum += sample.gaze_point_2d_R_norm[0];
-                self.gaze_y_sum += sample.gaze_point_2d_R_norm[1];
-                self.eye_x_sum += sample.eye_origin_R_mm[0];
-                self.eye_y_sum += sample.eye_origin_R_mm[1];
-                self.eye_z_sum += sample.eye_origin_R_mm[2];
-            }
-            self.valid_count += 1;
+        if (l_ok and r_ok) {
+            self.gaze_x_sum += sample.gaze_point_2d_norm[0];
+            self.gaze_y_sum += sample.gaze_point_2d_norm[1];
+            self.eye_x_sum += (sample.eye_origin_L_mm[0] + sample.eye_origin_R_mm[0]) / 2.0;
+            self.eye_y_sum += (sample.eye_origin_L_mm[1] + sample.eye_origin_R_mm[1]) / 2.0;
+            self.eye_z_sum += (sample.eye_origin_L_mm[2] + sample.eye_origin_R_mm[2]) / 2.0;
+            // v0.3 BATCH_1: jaw/cheek wobble witness — |L_y - R_y| on
+            // normalized per-eye 2D. High mean = jaw artifacts at this point.
+            self.jaw_diff_sum += @abs(sample.gaze_point_2d_L_norm[1] - sample.gaze_point_2d_R_norm[1]);
+            self.jaw_diff_cnt += 1;
+            self.left_eye_frames += 1;
+            self.right_eye_frames += 1;
+        } else if (l_ok) {
+            self.gaze_x_sum += sample.gaze_point_2d_L_norm[0];
+            self.gaze_y_sum += sample.gaze_point_2d_L_norm[1];
+            self.eye_x_sum += sample.eye_origin_L_mm[0];
+            self.eye_y_sum += sample.eye_origin_L_mm[1];
+            self.eye_z_sum += sample.eye_origin_L_mm[2];
+            self.left_eye_frames += 1;
+        } else {
+            self.gaze_x_sum += sample.gaze_point_2d_R_norm[0];
+            self.gaze_y_sum += sample.gaze_point_2d_R_norm[1];
+            self.eye_x_sum += sample.eye_origin_R_mm[0];
+            self.eye_y_sum += sample.eye_origin_R_mm[1];
+            self.eye_z_sum += sample.eye_origin_R_mm[2];
+            self.right_eye_frames += 1;
         }
-        self.sample_count += 1;
-
-        return self.sample_count >= SAMPLES_PER_POINT;
+        self.valid_count += 1;
     }
+    self.sample_count += 1;
+
+    return self.sample_count >= samplesForPoint(self.current_point);
+}
 
     pub const PointOutcome = enum { next_point, retry, finished, failed };
 
@@ -304,9 +338,9 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
         const n = @as(f64, @floatFromInt(self.valid_count));
         const loss_rate = 1.0 - n / @as(f64, @floatFromInt(@max(self.sample_count, 1)));
 
-        // BATCH_4: if eye_loss_rate > 30% on corner points 1-4 (not center), RETRY.
-        // Corner points are indices 1-4 (TL, TR, BL, BR). Center is index 0.
-        const is_corner = idx >= 1 and idx <= 4;
+        // BATCH_4: if eye_loss_rate > 30% on non-center points, RETRY.
+        // All non-center points (1-8: near-corners + true edges) can have high eye loss.
+        const is_corner = idx >= 1 and idx < NUM_CAL_POINTS;
         if (is_corner and loss_rate > 0.30) {
             self.retries += 1;
             if (self.retries >= MAX_POINT_RETRIES) {
@@ -354,6 +388,14 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
             self.result_eye[idx][0], self.result_eye[idx][1], self.result_eye[idx][2],
             self.valid_count, self.sample_count,
         });
+        // BATCH_2: per-eye ratio log — single-eye points flagged for offset analysis.
+        const total_eye_frames = self.left_eye_frames + self.right_eye_frames;
+        if (total_eye_frames > 0) {
+            const l_ratio = @as(f64, @floatFromInt(self.left_eye_frames)) / @as(f64, @floatFromInt(total_eye_frames));
+            log.info("point {d}: left_ratio={d:.3} (L={d} R={d})", .{
+                idx, l_ratio, self.left_eye_frames, self.right_eye_frames,
+            });
+        }
 
         self.current_point += 1;
         self.sample_count = 0;
@@ -363,6 +405,11 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
         self.eye_y_sum = 0;
         self.eye_z_sum = 0;
         self.valid_count = 0;
+        self.jaw_diff_sum = 0;
+        self.jaw_diff_cnt = 0;
+        self.left_eye_frames = 0;
+        self.right_eye_frames = 0;
+        self.settle_remaining = 0;
 
         if (self.current_point >= NUM_CAL_POINTS) {
             return .finished; // all points done

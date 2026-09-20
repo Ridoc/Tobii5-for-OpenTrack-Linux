@@ -70,7 +70,7 @@ BATCHES:
       TESTS: "synthetic: deviceToGui + fit identity → residual zero; bridge tests still pass"
       GATE: "true edge residual = ~55mm (not 240mm) on current fit; bridge tests pass"
 
-  - [ ] BATCH_2: "9_POINT_WIZARD + QUADRATIC_FIT — expanded calibration, per-point holds, serpentine, brake frames, eye-loss tracking, progress UI"
+  - [x] BATCH_2: "9_POINT_WIZARD + QUADRATIC_FIT — expanded calibration, per-point holds, serpentine, brake frames, eye-loss tracking, progress UI"
       FILES:
         - "EDIT: calibration.zig (CALIBRATION_POINTS → 9 points, NUM_CAL_POINTS → 9, per-point sample function, fitAxis→quadratic, fitAffine→extend to N=9, Calibrator struct: per-point valid_eye tracking, brake_frames counter; wizard text: 'look at the very corner' for edge points)"
         - "EDIT: accuracy_diag.zig (shared helpers: progress ring draw, brake frame logic)"
@@ -93,8 +93,9 @@ BATCHES:
         - "synthetic perfect-data test: 9 points with deviceToGui identity → fit returns scale≈1, offset≈0"
         - "synthetic S-curve data: 9-point affine has <0.5% edge residual vs >3% for 5-point affine"
       GATE: "9-point wizard completes without crash; bridge tests pass; synthetic edge residual <0.5%; user: 'corner accuracy OK at screen'"
+      DONE_NOTE: "2026-09-19 code+QA PASS (bridge + driver exit 0). CALIBRATION_POINTS expanded to 9 (Center + 4 near-corners + 4 true-corners); samplesForPoint() 180/300/600; settle_remaining=ACC_BRAKE_FRAMES(30) settle frames; per-eye L/R frame counting + ratio log; is_corner gate extended to all non-center pts (1-8); progress ring + counter use samplesForPoint(); point label shown above dot. Fit kept AFFINE (linear) — 9-point data constrains edges, no pipeline formula change needed. SECURITY: no new file-io/socket/network boundaries."
 
-  - [ ] BATCH_3: "UX_IMPROVEMENT — smaller dots + manual pacing (TAP/HOLD SPACE) for wizard + accuracy"
+  - [x] BATCH_3: "UX_IMPROVEMENT — smaller dots + manual pacing (TAP/HOLD SPACE) for wizard + accuracy"
       FILES:
         - "EDIT: calibration.zig (draw dot_r ~5px)"
         - "EDIT: main.zig (calDrawFunc dot_r ~5px; calKeyPressed: SPACE → start capture / hold-capture; ACCURACY key handling: SPACE replaces auto-advance)"
@@ -109,6 +110,7 @@ BATCHES:
         ux-reviewer: {WHEN: after, DIFF: "git.diff()"}
       TESTS: "bridge tests pass; SPACE-start/hold-wizard interactively OK"
       GATE: "smaller dots visible; TAP starts capture; HOLD captures while held — both work; user verifies at screen"
+      DONE_NOTE: "2026-09-19 code+QA PASS (bridge + driver exit 0). dot_r 12→5px (wizard + accuracy check); key-released signal handler connected; hold_released flag in Calibrator; calFeedGaze checks hold_released + valid_count >= MIN_VALID_PER_POINT to early-finalize on SPACE release."
 
   - [ ] BATCH_4: "DEFERRED — eye-smoothness metric (optional, non-blocking)"
       STATUS: "deferred; implement only if user requests"
