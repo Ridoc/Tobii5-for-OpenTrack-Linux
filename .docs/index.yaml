@@ -2,13 +2,14 @@
 # O(1) direct lookup: route by domain → leaf spec.
 VERSION: "1.1"
 PROJECT: "Ridoc/Tobii5-for-OpenTrack-Linux (TobiiArgus)"
-UPDATED: "2026-09-16"
+UPDATED: "2026-09-21"
 
 PATH_ROUTES:
   /:
     - "README.md"
     - "plan-spec.yaml (v0.2.7 plan — COMMITTED in release commit e3da30f 2026-08-30; remaining batches DEFERRED to tech-debt)"
     - "plan-spec-v0-3.yaml (v0.3 plan — written 2026-09-16, AWAITING USER APPROVAL; jitter-first P0)"
+    - "plan-spec-cal-fit-v0.3.1.yaml — ARCHIVED/DELETED in commit 36abb05 (2026-09-21); cal-fit plan complete + released as v0.3.2-rc.1"
   /docs:
     - "docs/x4-foundations-opentrack.md"
     - "docs/session-continuation.md"
@@ -32,8 +33,8 @@ CONCEPT_ROUTES:
   RESOLVED: ".docs/resolved.yaml"
   SESSION: ".docs/session.yaml"
   DEV_ENV: ".docs/dev-env.yaml"
-   GAZE_TRANSFORM: ".docs/gaze-transform.yaml"
-   LESSONS: ".docs/lessons.yaml"
+  GAZE_TRANSFORM: ".docs/gaze-transform.yaml"
+  LESSONS: ".docs/lessons.yaml"
 
 DOMAIN_NOTES:
   X4_NATIVE: "X4: Foundations native Linux build, OpenTrack listener 127.0.0.1:4242 since 7.50 public beta; opencode/x4 multiplier 1.0/1.0."
@@ -45,3 +46,4 @@ DOMAIN_NOTES:
   LESSONS_LEARNED: "→ gaze-transform.yaml §GAZE_Y_TRANSFORM_SAGA (Y-axis saga v0.1.1→v0.2.6). 3 transferable rules: (1) NEVER assume device axis origin/direction — confirm raw_y range + glance direction empirically BEFORE writing any transform; (2) a stale calibration.json (negative gaze_y_scale) silently flips Y — after ANY geometry change delete calibration.json + rerun wizard, verify gaze_y_scale positive; (3) single shared transform helper (core.deviceToGui) used by pipeline+GUI+fitAffine so all 3 paths agree — a wrong-direction base transform makes the wizard fitAxis reject the (negative) scale and silently no-op, so 'calibration never sticks' is a SYMPTOM of a wrong base transform, not a calibration bug. (4) v0.2.7 BATCH_2: the corner-hold witness (tobii_filter 3c) assumes OUTPUT-sign == GAZE-sign; synthetic tests must pin the gaze on the SAME side as the output (flip=false + pivotTurn(+deg) => gaze 0.3; flip=true => gaze 0.7), else the witness caps the n=1 drift and the test silently measures the wrong thing. (5) v0.2.7 BATCH_2 v3 (2026-08-30): never tune raw-space drift bounds with head_gain=1.0 + linear curve — the real rig edge amplification (gain x Tobii-spline slope, ~8x near 20-35 input) silently blows RAW targets into 124-145 deg OUTPUT while tests pass; caps must be expressed in OUTPUT space via invertCurve()/head_gain. Cap the drift TARGET, never the live value (live clamp = instant snap, breaks long-holds like BATCH_1e's lg=-25->160). Synthetic corner tests must use REALISTIC gaze strength (0.7, not 0.85): an unrealistically strong pinned gaze inflates the eye_ratio tug and 'fails' the cap test via a mechanism the real rig never hits."
   PLAN_V0_2_7: "plan-spec.yaml rewritten 2026-08-29 by plan agent: v0.2.7 Corner Tracking (B1 stability -> B2 range -> B3 diagnostics -> B4 jaw filter), BASE_COMMIT f837c53, APPROVED 2026-08-29, user chose 'Both, stability first'. PROGRESS: BATCH_1 DONE + user-confirmed; BATCH_2 rework v4.1-v4.6 (gaze-anchored drift, output-space cap, release-ease, n=2 reach, tug 0.88) code+QA green; v4.6 DEPLOYED + RELEASED as v0.2.7 (2026-08-30, commit e3da30f, tag + gh release) — v4.6 USER GATE NOT fully re-run. 2026-08-31 SESSION CLOSED (user: 'all open points are tech debts, we released so we must stop'): BATCH_2 gate skipped/deferred, BATCH_3-7 DEFERRED, all remaining work documented in .docs/tech-debt.yaml (batch2-v46-user-gate, batch3-corner-diagnostics, batch4-jaw-filter, batch5-cal-quality-gates, batch6-factor-consistency, batch7-ux-viz, batch8-docs-leftovers) + plan-spec TECH_DEBT. NO code changes expected until a future user-initiated session."
   PLAN_V0_3: "plan-spec-v0-3.yaml written 2026-09-16 (AWAITING APPROVAL). P0=user directive 'jitter in center space must be fixed first' (data-first: BATCH_1 jitter/corner diagnostics BEFORE smoothing changes; no hardcoded 0.12). External research ADOPTED: accuracy-diagnostic(39-target sweep), cal-reapply-on-connect, tolerance-region viz; OUT_OF_SCOPE packaging/udev, ML-pitch, gaze-mouse, virtual-joystick, EDID-setup, native-X4-plugin. TECH_DEBT re-mapped: batch2-v46->B3, batch3-corners->B1, batch4-jaw/gui-jitter->B2, batch5-cal->B4, batch7-ux->B5, fast-turn-overshoot->B2 candidate."
+  PLAN_CAL_FIT: "plan-spec-cal-fit-v0.3.1.yaml COMPLETED + RELEASED as v0.3.2-rc.1 (commit 36abb05, 2026-09-21). BATCH_0/1 (accuracy_diag module + units fix, v0.3.1-rc.1) + BATCH_2/3 (9-point wizard + TAP/HOLD UX, v0.3.1-rc.2) + final polish (HOLD-only, bezel corners 0.04/0.96, settle fix, cairo import, dot radius, v0.3.2-rc.1). BATCH_4/5 (autopa, cal quality gates) DEFERRED. plan-spec-cal-fit-v0.3.1.yaml archived (deleted per PLAN_ARCHIVE lifecycle). QA: bridge 29/29 + driver tests PASS."

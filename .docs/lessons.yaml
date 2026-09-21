@@ -1,7 +1,7 @@
 # lessons.yaml — append-only lessons ledger (hard-won, attributed, date-stamped)
 # Indexed-docs discipline: terse; root_cause + prevention only. History in git log.
 # See .docs/index.yaml CONCEPT_ROUTES -> LESSONS
-UPDATED: "2026-09-19"
+UPDATED: "2026-09-21"
 
 LESSONS:
   - id: "2026-09-16-plan-spec-write-quirk"
@@ -45,3 +45,24 @@ LESSONS:
     prevention: "Track which eye(s) are valid per calibration point (left_eye_frames / right_eye_frames counters); log per-point eye_ratio; if residual maps show consistent lateral bias at single-eye corners, subtract a monocular offset (½ IPD) for those points during the fit."
     session: "cal-fit-v0.3.1"
     verified: "2026-09-19"
+
+  - id: "2026-09-21-hold-only-prevents-tap-race"
+    domain: "calibration"
+    root_cause: "TAP (press-to-start-fixed-duration) mode in the calibration wizard had a race condition: the GTK key-press handler called beginCapture() directly, racing the stream thread's sample accumulation — a fast tap could start-capture and immediately auto-advance before the stream thread saw pending_start, losing samples."
+    prevention: "HOLD-only mode: SPACE press sets a pending_start flag (consumed by the stream thread via shared state, not direct beginCapture in the GTK handler); SPACE release sets hold_released flag (calKeyReleased handler); the stream thread checks both flags to start/finalize capture. Each point requires a deliberate press-and-hold — no auto-advance. TAP behavior removed entirely."
+    session: "cal-fit-v0.3.2-rc1"
+    verified: "2026-09-21"
+
+  - id: "2026-09-21-cairo-cimport-in-submodule"
+    domain: "build/cairo"
+    root_cause: "On Zig 0.15 ReleaseSafe, @cImport(\"cairo...\") in a non-root (sub-module) .zig file (accuracy_diag.zig) fails to link — Zig does not propagate the C header search/Linkage context to imported modules the same way as the root executable module, producing link errors or undefined C symbols in ReleaseSmall/ReleaseSafe."
+    prevention: "Always place @cImport for system libraries (cairo, gtk) in the ROOT module (main.zig) and pass the C types/functions down to submodules via module-level const aliases or parameter passing. accuracy_diag.zig is now pure data (constants + types, no @cImport). If a submodule needs a C type, define a Zig-side alias and let the root module own the import."
+    session: "cal-fit-v0.3.2-rc1"
+    verified: "2026-09-21"
+
+  - id: "2026-09-21-bezel-obscures-edge-corners"
+    domain: "calibration/UX"
+    root_cause: "True-edge calibration stimulus points placed at normalized 0.02/0.98 (2% / 98% of screen width/height) land physically under or behind the monitor's plastic bezel on ultrawide displays, so the user cannot see the dot — the point is unreachable and calibration fails at that corner."
+    prevention: "True-edge corners inset to 0.04/0.96 (4% / 96%): far enough from the absolute edge to clear the bezel lip on the Ridoc ET5 clip-mount geometry (800x330mm display, origin (-400,-10), tilt 12 deg), while still at the physical gaze-range boundary that constrains the affine fit. This keeps the corner within the ET5's usable gaze range while being visible above the bezel."
+    session: "cal-fit-v0.3.2-rc1"
+    verified: "2026-09-21"

@@ -11,11 +11,13 @@ TAGS:
   v0.2.3: "tagged (commit 75ce1a4, E2E test fixes); E2E test session 2026-08-22"
   v0.2.4: "tagged (commit 2a1ca2c, eye-viz validity fix + cal-progress-ui + track-box investigation docs); 2026-08-23"
   v0.2.7: "RELEASED 2026-08-30 (commit e3da30f 'feat(v0.2.7): corner stability + range rework — v4.6 release'). Tag v0.2.7 pushed + gh release published. Release build = v4.6 (BUILD_INFO 5e7a301+v4.6-corner-reach-release-fix, QA bridge 23/23 + driver 23/23)."
+  v0.3.2-rc.1: "RELEASED 2026-09-21 (commit 36abb05 'v0.3.2-rc.1: UX polish — HOLD-only, smaller dots, bezel-adjusted corners, settle fix'). Tag v0.3.2-rc.1 pushed + gh release created. QA: bridge 29/29 + driver tests PASS."
 
 GITHUB_RELEASES:
   v0.1.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.1.1"
   v0.2.0: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.2.0"
   v0.2.7: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.2.7"
+  v0.3.2-rc.1: "https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux/releases/tag/v0.3.2-rc.1"
 
 SHIPPED_IN_V0.2.0:
   - "calibration wizard (applications/tobiifree-opentrack/src/calibration.zig) + GUI integration (main.zig)"

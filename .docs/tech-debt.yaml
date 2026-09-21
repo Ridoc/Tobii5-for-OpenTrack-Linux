@@ -2,7 +2,7 @@
 # DEBT_POLICY: once an item is confirmed by testing (manual/user preferred),
 # move it to .docs/resolved.yaml. Keep items OPEN if only internal/QA-tested
 # with low confidence, until verified and really fixed.
-UPDATED: "2026-09-16"
+UPDATED: "2026-09-21"
 STATUS: "OPEN_ITEMS_ONLY"
 
 ITEMS:
@@ -62,7 +62,15 @@ ITEMS:
     severity: "low"
     status: "open"
     detail: "DEFERRED BATCH_7 UX: dimmed extended-track-area rect in drawViz (main.zig:708-780) + 'uncalibrated — run wizard' badge when no calibration.json. ux-reviewer acceptance folded into plan-spec. -> NOW BATCH_5 (UX viz: tolerance region + uncalibrated badge) in plan-spec-v0-3.yaml."
-  - id: "batch8-docs-leftovers"
+   - id: "batch8-docs-leftovers"
     severity: "low"
     status: "open"
     detail: "DEFERRED BATCH_8 leftovers: gaze-transform.yaml FACTOR<->CALIBRATION coupling note (any factor change -> wizard re-run) NOT yet written; corner items stay OPEN until BATCH_2/4 user gates pass."
+  - id: "cal-fit-batch4-5-deferred"
+    severity: "low"
+    status: "open"
+    detail: "cal-fit plan BATCH_4/5 DEFERRED after v0.3.2-rc.1 release. BATCH_4 = per-point eye_loss_rate > 30% retry + warn for near-corners (indices 2-4, not true-edge 5-8 where loss is expected); eye_loss_rate gate already removed for true-edge points in v0.3.2-rc.1. BATCH_5 = autopa (auto-reapply calibration on daemon connect) + tolerance-region viz. Await v0.3 plan (jitter-first P0) approval — may be reprioritized."
+  - id: "edge-accuracy-yellow"
+    severity: "low"
+    status: "open"
+    detail: "Post-v0.3.2-rc.1 9-point calibration, edge residuals still yellow (50-100mm) at true-edge corners. User accepted ('even yellow on the other corners, which is great!'). Root cause: single-eye tracking at extreme angles — ET5 hardware FOV/track-box limit. No further calibration fix expected for v0.3.2."

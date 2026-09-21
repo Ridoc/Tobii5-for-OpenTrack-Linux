@@ -102,15 +102,15 @@ active geometry is logged at startup:
 `tobiifreedot --force-display-area` to re-apply a stored config, and note the
 startup warning if `z_mm=0` (display plane through sensor = garbage gaze).
 
-**Visual calibration wizard (v0.2.0, enhanced in v0.3.1-rc.2).** Click **Calibrate** in the bridge GUI:
+**Visual calibration wizard (v0.2.0, enhanced in v0.3.2-rc.1).** Click **Calibrate** in the bridge GUI:
 
 1. A fullscreen dark window shows a white dot at the screen center.
-2. Look at the dot, press **SPACE** — samples are captured (~3 s for center, ~5 s for near-corners, ~10 s for true-edge corners), then the dot moves on. Repeat for all 9 points (Center + 4 near-corners + 4 true-edge corners).
-3. **TAP SPACE** starts a fixed-duration capture; **HOLD SPACE** captures while held (released releases early-finalize if enough valid frames accrued). Both modes work on the same key.
+2. Look at the dot, press and **HOLD SPACE** — samples are captured (~3 s for center, ~5 s for near-corners, ~10 s for true-edge corners at the physical gaze-range boundary), then the dot moves on. Repeat for all 9 points (Center + 4 near-corners + 4 true-edge corners). Release SPACE to finalize the current point early if enough valid frames have accrued.
+3. **HOLD-ONLY SPACE**: press to start, hold to accumulate, release to finalize. Each point requires a deliberate press-and-hold — no TAP auto-advance (eliminates race conditions in the GTK key handler).
 4. **ESC** cancels anytime. Progress ring around the dot + capture counter; the instruction sits above the dot (bright yellow), the live capture counter below it (green).
 5. After the last point the wizard computes the sensor-to-screen distance from the averaged eye origins, writes it to `~/.config/tobii.json` and drives the device calibration over the daemon socket: `start_calibration` → `add_calibration_point`×9 → `finish_calibration`, then applies the returned calibration blob with `cal_apply`.
 
-Tested behavior: a full 9-point run completes and persists the result; true-edge corners track on a single eye at extreme angles (hardware FOV/track-box limit); dot radius reduced to 5 px for more precise targeting.
+Tested behavior: a full 9-point run completes and persists the result; true-edge corner points inset to 0.04/0.96 to clear the bezel (0.02/0.98 was unreachable on ultrawide); single-eye tracking at extreme angles is expected (hardware FOV/track-box limit); dot radius reduced to 5 px for more precise targeting.
 
 ### In-game setup
 

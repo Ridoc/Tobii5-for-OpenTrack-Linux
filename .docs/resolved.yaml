@@ -2,7 +2,7 @@
 # DEBT_POLICY (librarian): tech-debt.yaml holds OPEN items ONLY.
 # Move an item HERE ONLY when it is confirmed by testing — manual/user
 # confirmation preferred. Low-confidence (internal QA-only) stays OPEN.
-UPDATED: "2026-08-30"
+UPDATED: "2026-09-21"
 STATUS: "VERIFIED_RESOLVED_AND_ACCEPTED_WORKAROUNDS"
 
 SECTIONS:
@@ -46,12 +46,39 @@ SECTIONS:
     - id: "corner-n-flap-stability"
       version: "v0.2.7"
       verified: "2026-08-29 USER at screen (BATCH_1 gate PASSED): corners now HOLD STEADY — n=1 wobble gone (trace p95 0.1deg yaw step, long n=1 holds stable). Fixes: pipeline validity gate accepts per-eye 2D plausibility (shared core.eye2dPlausible) so n=2/rot_both holds through origin-validity flickers; 6-frame n-flap debounce; n1 y-settle 1.0s; per-eye Y low-pass (α 0.3); freeze tug output + eye ratio at last n=2 corner value during n=1."
+    - id: "cal-9-point-wizard"
+      version: "v0.3.1-rc.2"
+      verified: "2026-09-21 user rig test: full 9-point run (Center + 4 near-corners + 4 true-edge) completes and persists; fit x=(-0.028/0.993) y=(-0.354/1.231); most points 2-20mm residual, edge points yellow (50-100mm). QA: bridge 29/29 + driver tests PASS."
+    - id: "cal-true-edge-bezel-inset"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21 user rig test: true-edge corners moved from 0.02/0.98 to 0.04/0.96 to clear bezel; all 9 points succeed where 0.02/0.98 was unreachable at screen extremes on ultrawide."
+    - id: "cal-hold-only-mode"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21 release commit 36abb05: TAP mode removed; SPACE press sets pending_start flag (consumed by stream thread), SPACE release sets hold_released flag (calKeyReleased). Eliminates TAP race condition where beginCapture() called directly in GTK handler raced stream thread."
+    - id: "cal-settle-no-sample-inflation"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-20 code: sample_count no longer increments during ACC_BRAKE_FRAMES(30) settle period; eye_loss_rate now reflects only post-settle hold time."
+    - id: "cal-max-retries-increased"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21: MAX_POINT_RETRIES 4 -> 8 for all points."
+    - id: "cal-true-edge-loss-gate"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21: eye_loss_rate gate removed for true-edge points (indices 5-8); single-eye tracking at extreme corners naturally has 70-97% loss; 30-frame minimum (MIN_VALID_PER_POINT) is sufficient quality gate for true-edge points."
+    - id: "cairo-import-in-main-module"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21 code: @cImport for cairo moved from accuracy_diag.zig to main.zig (root module); accuracy_diag.zig stripped to pure data (constants + types). Fixes Zig 0.15 ReleaseSafe link errors in sub-modules."
+    - id: "cal-dot-radius-reduced"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21: dot radius reduced from 12px to 5px in both wizard (calDrawFunc) and accuracy diagnostic (drawAccuracyResults)."
 
   ACCEPTED_WORKAROUNDS:  # confirmed limitation + working workaround (no active fix)
     - id: "nfs-build-quirk"
       verified: "2026-08-23 concrete examples: atomic rename fails on NFS but compile succeeds (local --cache-dir); manual binary copy to .zig-local/<app>/bin/ + BUILD_INFO.txt. See .docs/dev-env.yaml."
     - id: "hibernation-usb"
       verified: "Post-hibernation USB endpoint stale; daemon restart alone insufficient; USB unplug/replug + restart daemon+bridge. See docs/x4-foundations-opentrack.md."
+    - id: "edge-accuracy-yellow"
+      version: "v0.3.2-rc.1"
+      verified: "2026-09-21 user accepted: true-edge corner residuals remain yellow (50-100mm) — ET5 single-eye hardware FOV/track-box limit at extreme angles. User: 'even yellow on the other corners, which is great!'. No code fix expected."
 
   REMOVED:  # closed as out-of-scope / wontfix (not debt)
     - id: "squad-proton-udp-path"

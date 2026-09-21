@@ -1,6 +1,6 @@
 # session.yaml — current session state (last-known)
-UPDATED: "2026-09-19"
-SESSION_ID: "cal-fit-v0.3.1-rc2"
+UPDATED: "2026-09-21"
+SESSION_ID: "cal-fit-v0.3.2-rc1"
 WORKFLOW: "build agent per ~/.config/opencode/AGENTS.md; qa-tester -> security-reviewer -> librarian; skills read_skeleton + test-scrubber.sh"
 
 GOALS:
@@ -39,20 +39,24 @@ GOALS:
   - completed: "v0.3 PLANNING SESSION (2026-09-16, v0-3-planning-research, AWAITING APPROVAL): user directive P0='jitter in center space must be fixed first of all!! calibration or smoothing issue. i can look at a spot and still there is jitter'; corners/UX/calibration after. External research Tropaion(clean-room Rust ET5)/njmill(Wine POC)/Talon(wiki) -> ADOPTED accuracy-diagonal(39-target sweep)+cal-reapply-on-connect+tolerance-region-viz; OUT_OF_SCOPE packaging/udev,ML-pitch,gaze-mouse,virtual-joystick,EDID-setup,native-X4-plugin. plan-spec-v0-3.yaml written (6 batches: B1=jitter+corner diag data-first NO behavior change, B2=data-derived jitter fix, B3=v4.6 corner re-gate, B4=cal-accuracy+quality-gates+autopa, B5=UX viz, B6=v0.3.0 release). TECH_DEBT re-mapped: batch2-v46-user-gate->BATCH_3; batch3-corner-diagnostics->folded BATCH_1; batch4-jaw-filter+gui-eye-jitter->BATCH_2; batch5-cal-quality-gates->BATCH_4; batch7-ux-viz->BATCH_5; fast-turn-overshoot(v4.7)->BATCH_2 candidate. product-owner+ux-designer+ux-reviewer spawned; specs folded into plan. Lessons captured in .docs/lessons.yaml (incl. write-tool NFS abs-path quirk -> bash heredoc fallback)."
    - completed: "v0.3.1 BATCH_2 (9-POINT WIZARD + TRUE-EDGE POINTS): CALIBRATION_POINTS expanded to 9 (Center + 4 near-corners + 4 true-corners at 0.02/0.98 edges); samplesForPoint() returns 180/300/600 by point type; settle_remaining=ACC_BRAKE_FRAMES(30) settle frames on point transition; per-eye L/R frame counting + ratio log; is_corner gate extended to all non-center pts (indices 1-8); progress ring + counter use samplesForPoint(); point label instruction shown above dot. Fit kept AFFINE (linear) — 9-point data constrains edges, no pipeline formula change needed. bridge 29/29 + driver tests PASS."
    - completed: "v0.3.1 BATCH_3 (UX IMPROVEMENT: SMALLER DOTS + TAP/HOLD PACING): dot_r 12→5px in wizard (main.zig calDrawFunc) + accuracy check (accuracy_diag.zig); key-released signal handler connected; hold_released flag in Calibrator; calFeedGaze checks hold_released + valid_count >= MIN_VALID_PER_POINT to early-finalize on SPACE release. TAP=fixed capture start; HOLD=capture-while-held (min 30-frame guard). bridge 29/29 + driver tests PASS."
+   - completed: "v0.3.1-rc.2 released (commit 5e228fa): 9-point wizard with 0.02/0.98 true-edge corners, samplesForPoint() 180/300/600, settle frames, per-eye L/R tracking, smaller dots (5px), TAP/HOLD SPACE pacing. bridge 29/29 + driver tests PASS."
+   - completed: "v0.3.2-rc.1 released (commit 36abb05 'v0.3.2-rc.1: UX polish — HOLD-only, smaller dots, bezel-adjusted corners, settle fix'): final UX polish completing the cal-fit plan. (1) True-edge corners 0.02/0.98 -> 0.04/0.96 (bezel obscuration fix; all 9 points now succeed). (2) HOLD-only mode (TAP removed; pending_start flag + calKeyReleased handler eliminate race conditions). (3) eye_loss_rate gate removed for true-edge points 5-8. (4) Settle frames no longer inflate sample_count (loss rate reflects only post-settle hold time). (5) MAX_POINT_RETRIES 4->8. (6) cairo @cImport moved from accuracy_diag to main.zig (sub-module import fix on Zig 0.15 ReleaseSafe); accuracy_diag.zig stripped to pure data module. (7) dot_radius 12->5px in wizard + accuracy check. Rig test: 9-point calibration succeeds; fit x=(-0.028/0.993) y=(-0.354/1.231); accuracy most points 2-20mm residual, edge points yellow (50-100mm); user: 'even yellow on the other corners, which is great!'. QA: bridge 29/29 + driver tests PASS."
+   - completed: "cal-fit plan COMPLETE — BATCH_0/1 (rc.1) + BATCH_2/3 (rc.2) + final polish (rc.1). BATCH_4/5 (autopa, calibration quality gates) DEFERRED to tech-debt. plan-spec-cal-fit-v0.3.1.yaml archived (deleted per PLAN_ARCHIVE lifecycle in commit 36abb05)."
   - pending-intentional: "plan-spec.yaml at repo root — v0.2.7 plan (BASE_COMMIT f837c53, APPROVED 2026-08-29). COMMITTED inside release commit e3da30f. 2026-08-31: BATCH_2 status DEFERRED, BATCH_3-7 DEFERRED, BATCH_8 DONE; HANDOVER rewritten; full deferred-batch ledger added to TECH_DEBT section. All remaining batches are tech debt at this point."
+   - removed: "plan-spec-cal-fit-v0.3.1.yaml — cal-fit plan (BATCH_0/1 done rc.1; BATCH_2/3 done rc.2; final polish v0.3.2-rc.1). Archived/deleted in commit 36abb05 (2026-09-21) per PLAN_ARCHIVE lifecycle (execute -> docs-mapped -> deleted). History in git log."
   - removed: "Investigate: Squad/Proton UDP path (bridge on host localhost vs game in Wine namespace) — user confirmed OUT OF SCOPE"
 
 RUNTIME_STATE:
-  session_active: "v0.3.1-rc.1 committed (2026-09-19, BATCH_0/1 done: accuracy_diag module + units bug fix). THIS SESSION: v0.3.1-rc.2 (BATCH_2 9-point wizard + BATCH_3 UX: smaller dots + TAP/HOLD pacing) — code+QA PASS (bridge 29/29 + driver tests). plan-spec-cal-fit-v0.3.1.yaml staged for commit. v0.2.7 (bridge v4.6) remains deployed; no runtime change (manual calibration required for live testing)."
+  session_active: "v0.3.2-rc.1 RELEASED (2026-09-21, commit 36abb05). cal-fit plan COMPLETE: v0.3.1-rc.1 BATCH_0/1 (accuracy_diag module + units bug fix) + v0.3.1-rc.2 BATCH_2/3 (9-point wizard + TAP/HOLD UX) + v0.3.2-rc.1 final polish (HOLD-only, bezel corners 0.04/0.96, settle fix, cairo import, dot radius). v0.3.2-rc.1 ReleaseSafe binary built + installed. Tag v0.3.2-rc.1 pushed + GitHub release created. QA: bridge 29/29 + driver tests PASS. Next: awaiting user approval of plan-spec-v0-3.yaml (jitter-first P0)."
   binaries: "ReleaseSafe builds parked: applications/tobiifreed/zig-out/bin/tobiifreedot + applications/tobiifree-opentrack/zig-out/bin/tobiifree-opentrack (or .zig-local/ copies, see dev-env.yaml)"
   tobii_json: "~/.config/tobii.json display_area cy=-155 (working geometry)"
   qa_gate: "bridge 29/29 + driver zig build test PASS via test-scrubber.sh"
-  next_version: "v0.3.1-rc.2 (plan cal-fit-v0.3.1: BATCH_0/1 done rc.1, BATCH_2/3 done rc.2; BATCH_4/5 deferred)"
+  next_version: "v0.3.2-rc.1 RELEASED; awaiting plan-spec-v0-3.yaml approval (jitter-first)")
 
 NEXT_STEPS:
-  - "plan-spec-cal-fit-v0.3.1.yaml: BATCH_2/3 marked done; BATCH_4/5 remain deferred. Delete after all batches done + .docs mapped (PLAN_ARCHIVE lifecycle)."
-  - "BATCH_2/3 require USER at-screen verification (ET5 hardware FOV/track-box limit per .docs/resolved.yaml v0.2.4; upper corners reach, no single-frame pops)."
-  - "Until user approval of plan-spec-v0-3.yaml: no code beyond cal-fit-v0.3.1 plan."
+  - "cal-fit plan COMPLETE + RELEASED as v0.3.2-rc.1 (commit 36abb05, 2026-09-21). plan-spec-cal-fit-v0.3.1.yaml archived (deleted per PLAN_ARCHIVE lifecycle)."
+  - "BATCH_4/5 (autopa, calibration quality gates) DEFERRED — see .docs/tech-debt.yaml cal-fit-batch4-5-deferred."
+  - "Awaiting user approval of plan-spec-v0-3.yaml (jitter-first P0) before any further code."
 
 NOTE:
   - detail: "CRITICAL: concurrent TobiiArgus rebranding work appeared in same repo mid-session (main.zig window titles, justfile install-icons, assets/, scripts/export-brand-assets.mjs dated 2026-08-22 01:07-01:11). NOT mine, excluded."
