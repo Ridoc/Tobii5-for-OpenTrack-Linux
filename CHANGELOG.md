@@ -4,6 +4,20 @@ All notable changes to **Tobii ET5 → OpenTrack for Linux** (TobiiForX4Linux /
 `Ridoc/Tobii5-for-OpenTrack-Linux`). Versions correspond to git tags; the
 unreleased section tracks the working tree.
 
+## [v0.3.2-rc.1] — 2026-09-21
+
+### Fixed (user-testing round)
+- **True-edge corners moved inward**: 0.02/0.98 → 0.04/0.96 — extreme edge points were unreachable (bezel obscures dot). All 9 points now succeed.
+- **HOLD-only mode**: Removed TAP (press-to-start-fixed) behavior. Only HOLD SPACE: press to start, hold to accumulate, release to finalize. Each point requires a deliberate press — no auto-advance.
+- **Eye_loss_rate gate removed for true-edge points**: Single-eye tracking at extreme corners naturally has gaps (70-97% loss). The 30-frame minimum (`MIN_VALID_PER_POINT`) is sufficient quality gate for true-edge points.
+- **Settle frames no longer inflate eye_loss_rate**: `sample_count` no longer increments during settle period — loss rate reflects only post-settle hold time.
+- **MAX_POINT_RETRIES increased**: 4 → 8 for all points.
+- **cairo import moved from accuracy_diag to main.zig**: Sub-module `@cImport` failed in ReleaseSafe builds on Zig 0.15. `accuracy_diag.zig` is now pure data (constants + types).
+
+### Added
+- **pending_start flag**: HOLD-only mode uses `pending_start` (set by key-press, consumed by stream thread) instead of direct `beginCapture()` in the GTK key handler — eliminates race condition where TAP would auto-start capture.
+- **key-released handler**: `calKeyReleased` sets `hold_released` flag on SPACE release; stream thread checks it to finalize current point early.
+
 ## [v0.3.1-rc.2] — 2026-09-19
 
 ### Added

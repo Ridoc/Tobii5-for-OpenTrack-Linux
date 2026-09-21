@@ -967,6 +967,162 @@ fn openCalWindow() void {
     c.gtk_window_present(@ptrCast(win));
 }
 
+// ── Accuracy draw functions (moved to main.zig v0.3.1 BATCH_3 —     ──
+// ── cairo @cImport fails in sub-modules on zig 0.15 ReleaseSafe)     ──
+
+/// Draw the live accuracy check target (white dot + blue ring + progress).
+fn drawAccuracyCheck(cr: *c.cairo_t, w: f64, h: f64, acc_target_idx: usize, target: accuracy_diag.AccTarget, cap_n: usize) void {
+    const px = target.x * w;
+    const py = target.y * h;
+
+    // White target dot (5px).
+    const dot_r: f64 = 5;
+    c.cairo_set_source_rgb(cr, 1, 1, 1);
+    c.cairo_arc(cr, px, py, dot_r, 0, 2.0 * 3.14159265);
+    c.cairo_fill(cr);
+
+    // Blue progress ring.
+    const sweep = 2.0 * 3.14159265 * (@as(f64, @floatFromInt(cap_n)) / @as(f64, @floatFromInt(accuracy_diag.ACC_SAMPLES_PER_TARGET)));
+    c.cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
+    c.cairo_set_line_width(cr, 4);
+    c.cairo_arc(cr, px, py, dot_r + 6, -3.14159265 * 0.5, -3.14159265 * 0.5 + sweep);
+    c.cairo_stroke(cr);
+
+    // Progress bar at bottom.
+    const bar_h: f64 = 4;
+    const acc_progress = @as(f64, @floatFromInt(acc_target_idx)) / @as(f64, @floatFromInt(accuracy_diag.NUM_ACC_POINTS));
+    c.cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
+    c.cairo_rectangle(cr, 0, h - bar_h, w, bar_h);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
+    c.cairo_rectangle(cr, 0, h - bar_h, w * acc_progress, bar_h);
+    c.cairo_fill(cr);
+
+    // Target counter + instruction.
+    var status_buf: [96]u8 = undefined;
+    if (std.fmt.bufPrint(&status_buf, "Target {d}/39  —  Accuracy Check", .{acc_target_idx + 1})) |ptext| {
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+        c.cairo_set_font_size(cr, 16);
+        c.cairo_move_to(cr, 16, 30);
+        c.cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
+        calShowText(cr, ptext);
+    } else |_| {}
+
+    // "Hold still" instruction.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+    c.cairo_set_font_size(cr, 20);
+    var ext: c.cairo_text_extents_t = undefined;
+    calMeasureText(cr, "Hold still...", &ext);
+    c.cairo_move_to(cr, (w - ext.width) / 2.0, py + 50);
+    c.cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
+    calShowText(cr, "Hold still...");
+
+    // Cancel hint.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+    c.cairo_set_font_size(cr, 13);
+    c.cairo_move_to(cr, 16, h - 16);
+    c.cairo_set_source_rgb(cr, 0.55, 0.55, 0.55);
+    calShowText(cr, "ESC = cancel");
+}
+
+/// Draw the post-sweep accuracy heatmap (39-dot color + radius).
+fn drawAccuracyResults(cr: *c.cairo_t, w: f64, h: f64, results: []const accuracy_diag.AccPointResult, center_err: f64, mid_err: f64, edge_err: f64) void {
+    // Title.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+    c.cairo_set_font_size(cr, 22);
+    c.cairo_set_source_rgb(cr, 1, 1, 1);
+    c.cairo_move_to(cr, 30, 40);
+    calShowText(cr, "Accuracy Results");
+    c.cairo_set_font_size(cr, 14);
+    c.cairo_move_to(cr, 30, 65);
+    c.cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
+    calShowText(cr, "Per-target radial error (green <20  yellow 20-50  orange 50-100  red >100 mm)");
+
+    // Draw 39 target dots.
+    const margin: f64 = 60;
+    const dot_r: f64 = 7;
+    const n = @min(results.len, accuracy_diag.NUM_ACC_POINTS);
+    for (0..n) |i| {
+        const target = accuracy_diag.accTarget(i);
+        const px = margin + target.x * (w - 2.0 * margin);
+        const py = margin + target.y * (h - 2.0 * margin);
+        const err = results[i].error_mm;
+
+        if (err < 20.0) {
+            c.cairo_set_source_rgb(cr, 0.2, 0.9, 0.3);
+        } else if (err < 50.0) {
+            c.cairo_set_source_rgb(cr, 1.0, 0.85, 0.0);
+        } else if (err < 100.0) {
+            c.cairo_set_source_rgb(cr, 1.0, 0.55, 0.0);
+        } else {
+            c.cairo_set_source_rgb(cr, 1.0, 0.2, 0.2);
+        }
+
+        const radius = @min(dot_r + err / 20.0, 18.0);
+        c.cairo_arc(cr, px, py, radius, 0, 2.0 * 3.14159265);
+        c.cairo_fill(cr);
+
+        var err_buf: [16]u8 = undefined;
+        if (std.fmt.bufPrint(&err_buf, "{d:.0}", .{err})) |el| {
+            c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+            c.cairo_set_font_size(cr, 10);
+            c.cairo_set_source_rgb(cr, 1, 1, 1);
+            var text_ext: c.cairo_text_extents_t = undefined;
+            calMeasureText(cr, el, &text_ext);
+            c.cairo_move_to(cr, px - text_ext.width / 2.0, py + 3.5);
+            calShowText(cr, el);
+        } else |_| {}
+    }
+
+    // Band summary at bottom-left.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+    c.cairo_set_font_size(cr, 14);
+    const band_y = h - 50;
+    c.cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+
+    c.cairo_set_source_rgb(cr, 0.2, 0.9, 0.3);
+    c.cairo_arc(cr, 30, band_y - 3, 5, 0, 2.0 * 3.14159265);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+    c.cairo_move_to(cr, 45, band_y);
+    var band_buf: [128]u8 = undefined;
+    if (std.fmt.bufPrint(&band_buf, "Center p95: {d:.0} mm", .{center_err})) |b| calShowText(cr, b) else |_| {}
+
+    c.cairo_set_source_rgb(cr, 1.0, 0.85, 0.0);
+    c.cairo_arc(cr, 210, band_y - 3, 5, 0, 2.0 * 3.14159265);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+    c.cairo_move_to(cr, 225, band_y);
+    if (std.fmt.bufPrint(&band_buf, "Mid p95: {d:.0} mm", .{mid_err})) |b| calShowText(cr, b) else |_| {}
+
+    c.cairo_set_source_rgb(cr, 1.0, 0.55, 0.0);
+    c.cairo_arc(cr, 390, band_y - 3, 5, 0, 2.0 * 3.14159265);
+    c.cairo_fill(cr);
+    c.cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+    c.cairo_move_to(cr, 405, band_y);
+    if (std.fmt.bufPrint(&band_buf, "Edge p95: {d:.0} mm", .{edge_err})) |b| calShowText(cr, b) else |_| {}
+
+    // Guidance CTA.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
+    c.cairo_set_font_size(cr, 18);
+    if (edge_err > 100) {
+        c.cairo_move_to(cr, 30, band_y + 35);
+        c.cairo_set_source_rgb(cr, 1.0, 0.5, 0.3);
+        calShowText(cr, "Corner accuracy poor — press R to re-run the calibration wizard");
+    } else {
+        c.cairo_move_to(cr, 30, band_y + 35);
+        c.cairo_set_source_rgb(cr, 0.3, 0.8, 0.4);
+        calShowText(cr, "Accuracy OK — press ESC to close");
+    }
+
+    // Footer hint.
+    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+    c.cairo_set_font_size(cr, 13);
+    c.cairo_move_to(cr, 16, h - 16);
+    c.cairo_set_source_rgb(cr, 0.55, 0.55, 0.55);
+    calShowText(cr, "ESC = close   R = re-calibrate");
+}
+
 fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c_int, _: ?*anyopaque) callconv(.c) void {
     _ = da;
     // Snapshot wizard state under the lock (stream thread mutates it).
@@ -989,19 +1145,19 @@ fn calDrawFunc(da: [*c]c.GtkDrawingArea, cr: *c.cairo_t, width: c_int, height: c
     c.cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
     c.cairo_paint(cr);
 
-    // ── BATCH_4: Accuracy check / results → delegated to accuracy_diag ──
+    // ── BATCH_4: Accuracy check / results → delegated to local draw functions ──
     if (st == .accuracy_check) {
         const w_f = @as(f64, @floatFromInt(width));
         const h_f = @as(f64, @floatFromInt(height));
-        accuracy_diag.drawAccuracyCheck(cr, w_f, h_f, acc_idx, accuracy_diag.accTarget(acc_idx), cap_n);
+        drawAccuracyCheck(cr, w_f, h_f, acc_idx, accuracy_diag.accTarget(acc_idx), cap_n);
         return;
     }
 
-    // ── BATCH_4: Accuracy results heatmap (delegated) ─────────────────
+    // ── BATCH_4: Accuracy results heatmap ─────────────────────────────
     if (st == .show_accuracy_results) {
         const w_f = @as(f64, @floatFromInt(width));
         const h_f = @as(f64, @floatFromInt(height));
-        accuracy_diag.drawAccuracyResults(cr, w_f, h_f, acc_results[0..], acc_center, acc_mid, acc_edge);
+        drawAccuracyResults(cr, w_f, h_f, acc_results[0..], acc_center, acc_mid, acc_edge);
         return;
     }
 
@@ -1229,12 +1385,14 @@ fn calKeyPressed(_: *c.GtkEventControllerKey, keyval: c_uint, _: c_uint, _: c_ui
 
     if (keyval == GDK_KEY_space) {
         g_cal_mutex.lock();
-        defer g_cal_mutex.unlock();
         if (g_calibrator.state == .showing_point) {
-            g_calibrator.beginCapture();
-            if (g_cal_da) |da| c.gtk_widget_queue_draw(@ptrCast(da)); // main thread OK
+            // BATCH_3 HOLD-only: set pending_start; stream thread begins capture.
+            g_calibrator.pending_start = true;
+            g_cal_mutex.unlock();
+            if (g_cal_da) |da| c.gtk_widget_queue_draw(@ptrCast(da));
             return 1;
         }
+        g_cal_mutex.unlock();
     }
 
     return 0; // not handled
@@ -1281,12 +1439,15 @@ fn calFeedGaze(sample: *const proto.GazeSample) void {
             }
         }
     } else {
-        const done = g_calibrator.feedSample(sample);
+        // BATCH_3 HOLD-only: pending_start from key-press → beginCapture.
+        if (g_calibrator.pending_start) {
+            g_calibrator.pending_start = false;
+            g_calibrator.beginCapture();
+        }
+        _ = g_calibrator.feedSample(sample); // feedSample always returns false (HOLD-only)
         var outcome: ?calibration.Calibrator.PointOutcome = null;
-        if (done) {
-            outcome = g_calibrator.finalizePoint();
-        } else if (g_calibrator.hold_released and g_calibrator.valid_count >= calibration.MIN_VALID_PER_POINT) {
-            // BATCH_3: HOLD-SPACE released — finalize early if enough valid frames.
+        if (g_calibrator.hold_released and g_calibrator.valid_count >= calibration.MIN_VALID_PER_POINT) {
+            // BATCH_3: HOLD-SPACE released — finalize.
             g_calibrator.hold_released = false;
             outcome = g_calibrator.finalizePoint();
         }

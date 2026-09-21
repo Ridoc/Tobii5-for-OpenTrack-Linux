@@ -29,11 +29,11 @@ pub const CALIBRATION_POINTS = [_]CalPoint{
     .{ .x = 0.85, .y = 0.15, .label = "Near Top-Right" },
     .{ .x = 0.05, .y = 0.95, .label = "Near Bottom-Left" },
     .{ .x = 0.95, .y = 0.95, .label = "Near Bottom-Right" },
-    // True edge corners (single eye, nose-occluded)
-    .{ .x = 0.02, .y = 0.02, .label = "Edge Top-Left" },
-    .{ .x = 0.98, .y = 0.02, .label = "Edge Top-Right" },
-    .{ .x = 0.02, .y = 0.98, .label = "Edge Bottom-Left" },
-    .{ .x = 0.98, .y = 0.98, .label = "Edge Bottom-Right" },
+    // True edge corners (single eye, nose-occluded) — BATCH_3: moved from 0.02/0.98 to 0.04/0.96 for visibility
+    .{ .x = 0.04, .y = 0.04, .label = "Edge Top-Left" },
+    .{ .x = 0.96, .y = 0.04, .label = "Edge Top-Right" },
+    .{ .x = 0.04, .y = 0.96, .label = "Edge Bottom-Left" },
+    .{ .x = 0.96, .y = 0.96, .label = "Edge Bottom-Right" },
 };
 
 pub const NUM_CAL_POINTS = CALIBRATION_POINTS.len;
@@ -49,7 +49,7 @@ pub fn samplesForPoint(idx: usize) usize {
 /// away and the SAME point is retried (eyes often clip out of tracking range
 /// at extreme corners). After MAX_POINT_RETRIES weak attempts the run fails.
 pub const MIN_VALID_PER_POINT = 30; // BATCH_4: was 15
-pub const MAX_POINT_RETRIES = 4; // BATCH_4: was 3
+pub const MAX_POINT_RETRIES = 8; // BATCH_3: was 4 (increased for true-edge single-eye corners)
 
 pub const Calibrator = struct {
     state: CalState = .idle,
@@ -57,6 +57,8 @@ pub const Calibrator = struct {
     sample_count: usize = 0,
     // BATCH_2: settle frames between wizard points (discard first ~30 frames for gaze transition).
     settle_remaining: usize = 0,
+    // BATCH_3: HOLD-SPACE — set by key-press, consumed by feed path.
+    pending_start: bool = false,
     // BATCH_3: HOLD-SPACE release flag — set by key-release handler, checked in feed path.
     hold_released: bool = false,
 
@@ -276,13 +278,15 @@ pub const Calibrator = struct {
 /// Feed a gaze sample during capturing. One valid eye is enough for
 /// calibration (clip-mounted trackers frequently lose one eye at extreme
 /// angles). Returns true once the per-point sample count has been reached.
+/// BATCH_3: HOLD-only mode — always returns false (no auto-complete based on
+/// sample count). Only hold_released triggers early finalize in calFeedGaze.
 pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
     if (self.state != .capturing) return false;
 
     // BATCH_2: settle frames — discard initial samples for gaze transition.
+    // Do NOT count settle toward sample_count (would inflate eye_loss_rate).
     if (self.settle_remaining > 0) {
         self.settle_remaining -= 1;
-        self.sample_count += 1; // still count sample so total_count reflects elapsed time
         return false;
     }
 
@@ -325,7 +329,7 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
     }
     self.sample_count += 1;
 
-    return self.sample_count >= samplesForPoint(self.current_point);
+    return false; // BATCH_3: HOLD-only — no auto-complete based on count
 }
 
     pub const PointOutcome = enum { next_point, retry, finished, failed };
@@ -338,10 +342,12 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
         const n = @as(f64, @floatFromInt(self.valid_count));
         const loss_rate = 1.0 - n / @as(f64, @floatFromInt(@max(self.sample_count, 1)));
 
-        // BATCH_4: if eye_loss_rate > 30% on non-center points, RETRY.
-        // All non-center points (1-8: near-corners + true edges) can have high eye loss.
-        const is_corner = idx >= 1 and idx < NUM_CAL_POINTS;
-        if (is_corner and loss_rate > 0.30) {
+        // BATCH_4: if eye_loss_rate > 30% on near-corner points, RETRY.
+        // Near-corner points (1-4) should have both eyes visible; high loss = bad capture.
+        // True-edge points (5-8) are single-eye by design — skip the loss gate,
+        // only enforce the MIN_VALID_PER_POINT countdown below.
+        const apply_loss_gate = idx >= 1 and idx <= 4;
+        if (apply_loss_gate and loss_rate > 0.30) {
             self.retries += 1;
             if (self.retries >= MAX_POINT_RETRIES) {
                 log.err("point {d}: eye_loss_rate {d:.1}%% >30%% — still failing after {d} attempts, aborting", .{
@@ -410,6 +416,7 @@ pub fn feedSample(self: *Calibrator, sample: *const proto.GazeSample) bool {
         self.left_eye_frames = 0;
         self.right_eye_frames = 0;
         self.settle_remaining = 0;
+        self.pending_start = false;
 
         if (self.current_point >= NUM_CAL_POINTS) {
             return .finished; // all points done
