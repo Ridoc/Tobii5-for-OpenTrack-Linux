@@ -210,3 +210,13 @@ distributed under GPL-3.0: the ET5 driver, daemon, and protocol work is theirs;
 this repo adds the OpenTrack bridge and renames the daemon to **TobiifreedOT**
 (`tobiifreedot`). If you modify or redistribute this code, your changes must
 stay GPL-3.0 and credit the upstream work above.
+## Git and NAS
+
+`origin` is GitHub (`https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git`).
+The NAS copy is the `nas` remote:
+`ssh://bienenhaus/volume1/git/tobii-x4linux.git` on Bienenhaus (192.168.1.101),
+served by a key-only `git` user. The post-commit hook pushes `nas` and mirrors
+tracked files to `/mnt/bienenhaus-workspace/backups/OpenCode/tobii-x4linux/`;
+full-history bundles live at
+`/mnt/NAS-Zeno/backups/git/tobii-x4linux.bundle`. Restore with
+`git clone ssh://bienenhaus/volume1/git/tobii-x4linux.git` or the bundle.

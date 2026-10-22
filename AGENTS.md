@@ -41,3 +41,12 @@ WORKFLOW:
     session-close: "task(session-close) — ALWAYS at session end + post-commit: sync .docs/*.yaml (dev-env, resolved, session, tech-debt OPEN-only) + commit"
   SYNC: bugs→.docs/tech-debt.yaml (OPEN only; confirmed→.docs/resolved.yaml); session→.docs/session.yaml; release→.docs/release.yaml
   RELEASE: qa gate(just check) → commit → tag vX.Y.Z → push → gh release; keep CHANGELOG.md current
+
+## GIT
+repo: /mnt/NAS-Zeno/OpenCode/TobiiForX4Linux
+origin: https://github.com/Ridoc/Tobii5-for-OpenTrack-Linux.git (primary)
+nas_remote: ssh://bienenhaus/volume1/git/tobii-x4linux.git
+hook: ~/.config/opencode/git-hooks/post-commit (pushes nas; non-fatal)
+mirror: /mnt/bienenhaus-workspace/backups/OpenCode/tobii-x4linux/
+bundle: /mnt/NAS-Zeno/backups/git/tobii-x4linux.bundle
+restore: git clone ssh://bienenhaus/volume1/git/tobii-x4linux.git
