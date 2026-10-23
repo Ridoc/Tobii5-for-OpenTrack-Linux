@@ -141,7 +141,7 @@ fn saveCalFit() void {
 // Tobii-feel pipeline + preset storage (arena-backed, lives for app lifetime).
 var g_pipeline: tobii.TobiiPipeline = .{};
 var g_presets_arena: std.heap.ArenaAllocator = undefined;
-var g_preset_list: std.array_list.Managed(tobii.Preset) = undefined;
+var g_preset_list: std.ArrayList(tobii.Preset) = undefined;
 var g_cur_preset_idx: usize = 0;
 var g_save_preset_name: ?[]const u8 = null;
 var g_last_ts: i64 = 0;
@@ -2131,7 +2131,7 @@ fn streamThread() void {
 fn installSignalHandlers() void {
     const act = std.posix.Sigaction{
         .handler = .{ .handler = handleSignal },
-        .mask = std.posix.sigemptyset(),
+        .mask = std.posix.empty_sigset,
         .flags = 0,
     };
     std.posix.sigaction(std.posix.SIG.TERM, &act, null);
@@ -2144,7 +2144,7 @@ pub fn main() void {
         log.err("cannot load presets: {s}", .{@errorName(e)});
         std.process.exit(1);
     };
-    g_preset_list = std.array_list.Managed(tobii.Preset).init(g_presets_arena.allocator());
+    g_preset_list = std.ArrayList(tobii.Preset).init(g_presets_arena.allocator());
     g_preset_list.appendSlice(loaded) catch |e| {
         log.err("cannot init presets: {s}", .{@errorName(e)});
         std.process.exit(1);
