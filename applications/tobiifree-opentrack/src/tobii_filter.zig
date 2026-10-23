@@ -202,7 +202,7 @@ fn isBuiltinName(name: []const u8) bool {
 /// come from `allocator` (pass an arena for the app lifetime; the name slices
 /// reference the parsed file buffer, which stays owned by that arena).
 pub fn loadAllPresets(allocator: std.mem.Allocator) ![]Preset {
-    var list = std.array_list.Managed(Preset).init(allocator);
+    var list = std.ArrayList(Preset).init(allocator);
     errdefer list.deinit();
     try list.appendSlice(&BUILTIN_PRESETS);
 
@@ -227,15 +227,15 @@ pub fn loadAllPresets(allocator: std.mem.Allocator) ![]Preset {
 
 /// Writes only user-defined presets (built-ins are seeded from code).
 pub fn saveUserPresets(allocator: std.mem.Allocator, presets: []const Preset) !void {
-    var user = std.array_list.Managed(Preset).init(allocator);
+    var user = std.ArrayList(Preset).init(allocator);
     defer user.deinit();
     for (presets) |p| {
         if (!isBuiltinName(p.name)) try user.append(p);
     }
 
-    var arr = std.array_list.Managed(u8).init(allocator);
+    var arr = std.ArrayList(u8).init(allocator);
     defer arr.deinit();
-    const bytes = std.json.Stringify.valueAlloc(allocator, PresetFile{ .presets = user.items }, .{
+    const bytes = std.json.stringifyAlloc(allocator, PresetFile{ .presets = user.items }, .{
         .whitespace = .indent_2,
     }) catch |e| return e;
     defer allocator.free(bytes);
